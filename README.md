@@ -184,6 +184,13 @@ chapters as markup and `markup.ProseMirror` covers editor documents. Both
 implement `novel.Content`, and `markup.Auto` picks between them when a site sends
 one shape sometimes and the other the rest of the time.
 
+A link is routed by shape, not by a table of known URL paths: `Supports` claims
+the site and `ParseRef` pulls the book identifier out of whatever path the site
+happens to use today. `Registry.Resolve` reports the two failures separately —
+`ErrUnsupported` when no source claims the link at all, `ErrBadReference` when one
+did but the address carries no book identifier — because the person reading the
+error has to do something different in each case.
+
 `Chapter.Raw` is the site's own response; the cache stores exactly that and
 `DecodeChapter` turns it back into a chapter, so fixing a parser never means
 downloading anything again.

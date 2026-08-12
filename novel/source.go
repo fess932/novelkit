@@ -13,9 +13,16 @@ import (
 // a removed chapter, or one that is behind a paywall.
 var ErrNotFound = errors.New("novel: not found")
 
-// ErrUnsupported reports that no registered source handles this link, or that
-// a source does not implement the requested operation.
+// ErrUnsupported reports that no registered source handles this link, or that a
+// source does not implement the requested operation. Nothing the user can fix by
+// editing the address.
 var ErrUnsupported = errors.New("novel: unsupported")
+
+// ErrBadReference reports the opposite case: a source does handle this site, but
+// the address carries no book identifier it can use — a link to the front page,
+// to a search, or one that got truncated. Worth telling the user to check the
+// address, which is why it is separate from ErrUnsupported.
+var ErrBadReference = errors.New("novel: no book identifier in the link")
 
 // Source is a site to download books from.
 //
@@ -110,6 +117,12 @@ func (r *Registry) Sources() []Source {
 }
 
 // Resolve parses a link: it finds the source and extracts the book identifier.
+//
+// The two ways this fails call for different answers, so they are different
+// errors: ErrUnsupported means no source claims the link at all, while
+// ErrBadReference means one did but found no book identifier in it. In the
+// second case the matched source is still returned, so a caller can name the
+// site it was talking about.
 func (r *Registry) Resolve(rawURL string) (Source, string, error) {
 	s, ok := r.For(rawURL)
 	if !ok {
@@ -117,7 +130,7 @@ func (r *Registry) Resolve(rawURL string) (Source, string, error) {
 	}
 	id, ok := s.ParseRef(rawURL)
 	if !ok {
-		return nil, "", fmt.Errorf("%w: cannot parse link %s", ErrUnsupported, rawURL)
+		return s, "", fmt.Errorf("%w: %s (source %s)", ErrBadReference, rawURL, s.ID())
 	}
 	return s, id, nil
 }

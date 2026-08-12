@@ -100,6 +100,13 @@ func TestParseSlug(t *testing.T) {
 		ok   bool
 	}{
 		{"https://ranobelib.me/ru/book/14841--beginning-after-the-end-novel", "14841--beginning-after-the-end-novel", true},
+		// The site serves the same book under several sections, so the slug is
+		// found by shape rather than by a known prefix.
+		{"https://ranobelib.me/ru/manga/14841--beginning-after-the-end-novel", "14841--beginning-after-the-end-novel", true},
+		{"https://ranobelib.me/ru/manga/14841--x?section=chapters", "14841--x", true},
+		{"ranobelib.me/en/anything/deeper/14841--x/read/v1/c2", "14841--x", true},
+		{"https://ranobelib.me/ru/manga", "", false},
+		{"https://ranobelib.me/", "", false},
 		{"https://ranobelib.me/ru/book/14841--beginning-after-the-end-novel?section=chapters", "14841--beginning-after-the-end-novel", true},
 		{"14841--beginning-after-the-end-novel", "14841--beginning-after-the-end-novel", true},
 		{"a plain title with spaces", "", false},

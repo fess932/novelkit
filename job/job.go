@@ -216,6 +216,11 @@ func (s *Store) Plan(ctx context.Context, src novel.Source, req Request) (*Job, 
 	if err != nil {
 		return nil, err
 	}
+	// An unspecified translation is settled here, once, so that everything below
+	// — the chapter list, the cache directory, the saved state — talks about the
+	// same one.
+	req.EditionID = resolveEdition(book, req.EditionID)
+
 	chapters, err := src.Chapters(ctx, req.BookID, req.EditionID)
 	if err != nil {
 		return nil, err
@@ -229,6 +234,11 @@ func (s *Store) Plan(ctx context.Context, src novel.Source, req Request) (*Job, 
 		// A source may have no notion of translations at all, which is fine.
 		edition = novel.Edition{ID: req.EditionID, Chapters: len(chapters)}
 	}
+	// The job directory is keyed by the translation, so the identifier has to be
+	// settled before it is built: importing without choosing and then importing
+	// the very translation that was chosen must land in the same directory
+	// instead of downloading everything a second time.
+	editionID := edition.ID
 
 	novel.SortChapters(chapters)
 	from, to := req.From, req.To
@@ -243,7 +253,7 @@ func (s *Store) Plan(ctx context.Context, src novel.Source, req Request) (*Job, 
 	}
 	chapters = chapters[from-1 : to]
 
-	dir := filepath.Join(s.root, dirName(src.ID(), req.BookID, req.EditionID))
+	dir := filepath.Join(s.root, dirName(src.ID(), req.BookID, editionID))
 	for _, sub := range []string{"chapters", "assets"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
 			return nil, err
@@ -287,7 +297,7 @@ func (s *Store) Plan(ctx context.Context, src novel.Source, req Request) (*Job, 
 		j.state.Source = SourceRef{
 			ID:           src.ID(),
 			BookID:       req.BookID,
-			EditionID:    req.EditionID,
+			EditionID:    editionID,
 			EditionLabel: edition.Label(),
 			BookURL:      book.URL,
 		}
@@ -303,6 +313,28 @@ func (s *Store) Plan(ctx context.Context, src novel.Source, req Request) (*Job, 
 		}
 	}
 	return j, nil
+}
+
+// resolveEdition settles an unspecified translation. An empty identifier is a
+// valid one for sources that leave a translation unnamed, so it is kept when the
+// book really has such an edition; otherwise the fullest one is taken, which is
+// what a caller that did not choose almost always means.
+func resolveEdition(book *novel.Book, editionID string) string {
+	if editionID != "" || len(book.Editions) == 0 {
+		return editionID
+	}
+	if e, ok := book.Edition(""); ok && e.Chapters > 0 {
+		return ""
+	}
+
+	best := ""
+	bestCount := 0
+	for _, e := range book.Editions {
+		if e.Chapters > bestCount {
+			best, bestCount = e.ID, e.Chapters
+		}
+	}
+	return best
 }
 
 // Metadata assembles book metadata from the source's details and the chosen translation.

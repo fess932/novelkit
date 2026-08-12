@@ -196,27 +196,36 @@ func appendUnique(list []string, v string) []string {
 
 // ParseSlug extracts a book slug from a link, or passes the string through when
 // it already looks like one ("14841--beginning-after-the-end-novel").
+//
+// Any path shape works: the site serves the same book under /ru/book/<slug>,
+// /ru/manga/<slug> and other sections, so the first path segment shaped like
+// <digits>--<rest> wins rather than a fixed list of known prefixes.
 func ParseSlug(input string) (string, bool) {
 	s := strings.TrimSpace(input)
-	if i := strings.Index(s, "ranobelib.me/"); i >= 0 {
-		s = s[i+len("ranobelib.me/"):]
-		for _, prefix := range []string{"ru/", "en/", "book/"} {
-			s = strings.TrimPrefix(s, prefix)
+	if i := strings.IndexAny(s, "?#"); i >= 0 {
+		s = s[:i]
+	}
+	for seg := range strings.SplitSeq(s, "/") {
+		if seg == "" {
+			continue
 		}
-		if j := strings.IndexAny(s, "/?#"); j >= 0 {
-			s = s[:j]
+		if unescaped, err := url.PathUnescape(seg); err == nil {
+			seg = unescaped
 		}
-		if unescaped, err := url.PathUnescape(s); err == nil {
-			s = unescaped
+		if looksLikeSlug(seg) {
+			return seg, true
 		}
 	}
-	// A slug on this site always starts with the numeric book id.
-	id, rest, ok := strings.Cut(s, "--")
-	if !ok || rest == "" {
-		return "", false
+	return "", false
+}
+
+// looksLikeSlug reports whether a path segment is a book slug: on this site one
+// always starts with the numeric book id followed by "--".
+func looksLikeSlug(seg string) bool {
+	id, rest, ok := strings.Cut(seg, "--")
+	if !ok || id == "" || rest == "" {
+		return false
 	}
-	if _, err := strconv.Atoi(id); err != nil {
-		return "", false
-	}
-	return s, true
+	_, err := strconv.Atoi(id)
+	return err == nil
 }

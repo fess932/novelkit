@@ -325,6 +325,39 @@ func TestRangeSelection(t *testing.T) {
 	}
 }
 
+// Importing without choosing a translation and then importing the very one that
+// was chosen must reuse the same cache instead of downloading it all again.
+func TestUnspecifiedEditionReusesTheSameJob(t *testing.T) {
+	src, store := setup(t)
+	ctx := context.Background()
+
+	auto, err := store.Plan(ctx, src, job.Request{BookID: "book-1"})
+	if err != nil {
+		t.Fatalf("planning without a translation: %v", err)
+	}
+	if err := auto.Download(ctx, src, job.DownloadOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := auto.State().Source.EditionID; got != "main" {
+		t.Fatalf("an unspecified translation should settle on the fullest one, got %q", got)
+	}
+
+	before := src.chapters.Load()
+	explicit, err := store.Plan(ctx, src, job.Request{BookID: "book-1", EditionID: "main"})
+	if err != nil {
+		t.Fatalf("planning with the same translation: %v", err)
+	}
+	if explicit.Dir() != auto.Dir() {
+		t.Errorf("two cache directories for one translation:\n%s\n%s", auto.Dir(), explicit.Dir())
+	}
+	if err := explicit.Download(ctx, src, job.DownloadOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := src.chapters.Load() - before; got != 0 {
+		t.Errorf("%d chapters were downloaded again", got)
+	}
+}
+
 func TestPlanRejectsEmptyEdition(t *testing.T) {
 	src, store := setup(t)
 	if _, err := store.Plan(context.Background(), src, job.Request{BookID: "book-1", EditionID: "empty"}); err == nil {
