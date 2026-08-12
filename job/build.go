@@ -19,6 +19,9 @@ type BuildOptions struct {
 	Optimizer imagex.Optimizer
 	// CSS replaces the book's styling.
 	CSS string
+	// Labels are the words written into the book. The zero value follows the
+	// book's language, as reported by its source.
+	Labels epub.Labels
 	// OnWarning is called for non-fatal trouble: a skipped chapter, a broken picture.
 	OnWarning func(string)
 }
@@ -113,7 +116,13 @@ func (j *Job) Build(ctx context.Context, src novel.Source, w io.Writer, opts Bui
 		return "../images/" + out.Name, true
 	})
 
-	book := &epub.Book{Metadata: st.Book, CSS: opts.CSS}
+	// The wording follows the book's own language: a Russian book gets a Russian
+	// table of contents, not an English one.
+	labels := opts.Labels
+	if labels == (epub.Labels{}) {
+		labels = epub.LabelsFor(st.Book.Language)
+	}
+	book := &epub.Book{Metadata: st.Book, CSS: opts.CSS, Labels: labels}
 
 	for _, cs := range st.Chapters {
 		if err := ctx.Err(); err != nil {
@@ -134,7 +143,7 @@ func (j *Job) Build(ctx context.Context, src novel.Source, w io.Writer, opts Bui
 		book.Chapters = append(book.Chapters, epub.Chapter{
 			Volume: cs.Volume,
 			Number: cs.Number,
-			Title:  cs.Title(),
+			Title:  cs.Info().TitleWith(labels.Chapter),
 			Body:   body,
 		})
 	}

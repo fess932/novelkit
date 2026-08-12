@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,6 +55,7 @@ func (s *fakeSource) Book(_ context.Context, id string) (*novel.Book, error) {
 		Genres:        []string{"Fantasy"},
 		Year:          "2015",
 		Description:   "The book blurb.",
+		Language:      "ru",
 		CoverURL:      "https://fake.test/cover.jpg",
 		URL:           "https://fake.test/book-1",
 		Editions: []novel.Edition{
@@ -216,6 +218,37 @@ func TestReopenKeepsProgress(t *testing.T) {
 	jobs, err := store.List()
 	if err != nil || len(jobs) != 1 {
 		t.Fatalf("job list: %v, %d entries", err, len(jobs))
+	}
+}
+
+// The language reported by the source reaches the book: its metadata and its
+// chapter headings.
+func TestBookLanguageComesFromSource(t *testing.T) {
+	src, store := setup(t)
+	j := plan(t, store, src)
+	if err := j.Download(context.Background(), src, job.DownloadOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if lang := j.State().Book.Language; lang != "ru" {
+		t.Fatalf("book language: %q", lang)
+	}
+
+	var buf bytes.Buffer
+	if _, err := j.Build(context.Background(), src, &buf, job.BuildOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	r, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := r.Open("OEBPS/text/ch0001.xhtml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	data, _ := io.ReadAll(f)
+	if !strings.Contains(string(data), "Глава 1. First") {
+		t.Errorf("the chapter heading did not follow the language:\n%s", data)
 	}
 }
 

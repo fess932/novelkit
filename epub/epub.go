@@ -57,8 +57,8 @@ type Book struct {
 	Images   []Image
 	// CSS replaces the built-in styling.
 	CSS string
-	// Labels are the words written into the book itself; empty fields fall back
-	// to DefaultLabels.
+	// Labels are the words written into the book itself. The zero value follows
+	// Metadata.Language; empty fields fall back to DefaultLabels.
 	Labels Labels
 	// ID is the book's unique identifier. Empty means "generate one".
 	ID string
@@ -119,7 +119,12 @@ func (b *Book) WriteTo(w io.Writer) (int64, error) {
 	if meta.Language == "" {
 		meta.Language = "en"
 	}
-	labels := b.Labels.withDefaults()
+	// Wording follows the book's language unless the caller set it explicitly.
+	labels := b.Labels
+	if labels == (Labels{}) {
+		labels = LabelsFor(meta.Language)
+	}
+	labels = labels.withDefaults()
 	id := b.ID
 	if id == "" {
 		id = "urn:uuid:" + uuid()

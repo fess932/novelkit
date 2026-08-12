@@ -18,11 +18,43 @@ type Labels struct {
 	Genres          string
 	Source          string
 	Cover           string
+	// Chapter prefixes a chapter number in a heading, e.g. "Chapter 12".
+	Chapter string
 	// Volume prefixes a volume number, e.g. "Volume 3".
 	Volume string
 	// Start names the landmark pointing at the first chapter.
 	Start         string
 	UnknownAuthor string
+}
+
+// LabelsFor returns the wording for a language tag, falling back to
+// DefaultLabels for anything unknown. Only the primary subtag matters, so
+// "ru-RU" and "ru" give the same answer.
+func LabelsFor(lang string) Labels {
+	primary, _, _ := strings.Cut(strings.ToLower(strings.TrimSpace(lang)), "-")
+	if l, ok := labelsByLanguage[primary]; ok {
+		return l
+	}
+	return DefaultLabels
+}
+
+// labelsByLanguage holds the built-in wording. Callers with another language set
+// Book.Labels themselves.
+var labelsByLanguage = map[string]Labels{
+	"ru": {
+		TableOfContents: "Оглавление",
+		Annotation:      "Аннотация",
+		Author:          "Автор",
+		Translation:     "Перевод",
+		Year:            "Год",
+		Genres:          "Жанры",
+		Source:          "Источник",
+		Cover:           "Обложка",
+		Chapter:         "Глава",
+		Volume:          "Том",
+		Start:           "Начало",
+		UnknownAuthor:   "Неизвестный автор",
+	},
 }
 
 // DefaultLabels are the English defaults.
@@ -35,6 +67,7 @@ var DefaultLabels = Labels{
 	Genres:          "Genres",
 	Source:          "Source",
 	Cover:           "Cover",
+	Chapter:         "Chapter",
 	Volume:          "Volume",
 	Start:           "Start",
 	UnknownAuthor:   "Unknown author",
@@ -54,6 +87,7 @@ func (l Labels) withDefaults() Labels {
 		{&l.Genres, d.Genres},
 		{&l.Source, d.Source},
 		{&l.Cover, d.Cover},
+		{&l.Chapter, d.Chapter},
 		{&l.Volume, d.Volume},
 		{&l.Start, d.Start},
 		{&l.UnknownAuthor, d.UnknownAuthor},

@@ -250,15 +250,16 @@ blurb, the cover, one file per chapter, and print-like typography: paragraph
 indents, justified text, hyphenation.
 
 The words the builder writes into the book — "Table of contents", "Volume",
-"Annotation" and so on — come from `epub.Labels`. Override them to produce a book
-in another language:
+"Annotation" and so on — follow the book's language, which its source reports in
+`novel.Book.Language`. ranobelib.me serves Russian translations, so its books come
+out with Оглавление, Том and Глава without anyone asking.
+
+`epub.LabelsFor(lang)` exposes the same lookup, and setting `Book.Labels`
+explicitly overrides it:
 
 ```go
-book.Labels = epub.Labels{TableOfContents: "Оглавление", Volume: "Том", Annotation: "Аннотация"}
+book.Labels = epub.Labels{TableOfContents: "Contents", Volume: "Book"}
 ```
-
-Chapter headings work the same way: `novel.ChapterInfo.TitleWith("Глава")` builds
-them with your own word.
 
 ## Tests
 

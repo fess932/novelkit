@@ -107,8 +107,11 @@ type Book struct {
 	Year          string
 	// Description is the blurb, as plain text.
 	Description string
-	CoverURL    string
-	URL         string
+	// Language is the language the book is written in, as a BCP 47 tag ("ru",
+	// "en"). A source reports it because only the site knows what it serves.
+	Language string
+	CoverURL string
+	URL      string
 	// Editions lists the available translations. An empty list means the
 	// source has no notion of them.
 	Editions []Edition

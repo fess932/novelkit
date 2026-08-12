@@ -307,10 +307,14 @@ func (s *Store) Plan(ctx context.Context, src novel.Source, req Request) (*Job, 
 
 // Metadata assembles book metadata from the source's details and the chosen translation.
 func Metadata(b *novel.Book, edition novel.Edition) epub.Metadata {
+	language := b.Language
+	if language == "" {
+		language = "en"
+	}
 	return epub.Metadata{
 		Title:         b.Title,
 		OriginalTitle: b.OriginalTitle,
-		Language:      "ru",
+		Language:      language,
 		Authors:       b.Authors,
 		Translators:   edition.Translators(),
 		Genres:        b.Genres,

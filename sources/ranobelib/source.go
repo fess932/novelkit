@@ -14,6 +14,9 @@ import (
 // SourceID is written into the job cache, so it must stay stable.
 const SourceID = "ranobelib"
 
+// Language is what the site serves: it is a Russian translation library.
+const Language = "ru"
+
 // Source plugs ranobelib.me into the core: it implements novel.Source.
 //
 // A book's chapter list is cached in memory for the lifetime of the source;
@@ -104,6 +107,7 @@ func (s *Source) book(m *Manga, branches []Branch) novel.Book {
 
 	return novel.Book{
 		ID:            m.SlugURL,
+		Language:      Language,
 		Title:         title,
 		OriginalTitle: original,
 		Authors:       m.AuthorNames(),

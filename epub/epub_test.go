@@ -174,3 +174,44 @@ func hrefs(opf string) []string {
 	}
 	return out
 }
+
+// A book's wording follows its language, so a Russian book does not end up with
+// an English table of contents.
+func TestLabelsFollowLanguage(t *testing.T) {
+	b := sample()
+	b.Metadata.Language = "ru-RU"
+	r := open(t, b)
+
+	nav := read(t, r, "OEBPS/nav.xhtml")
+	for _, want := range []string{"<h1>Оглавление</h1>", "<li><span>Том 1</span>"} {
+		if !strings.Contains(nav, want) {
+			t.Errorf("the contents are missing %q", want)
+		}
+	}
+	if title := read(t, r, "OEBPS/text/title.xhtml"); !strings.Contains(title, "Аннотация") {
+		t.Errorf("the title page did not switch to Russian wording")
+	}
+	if got := epub.LabelsFor("ru").Chapter; got != "Глава" {
+		t.Errorf("LabelsFor(ru).Chapter = %q", got)
+	}
+	if got := epub.LabelsFor("de").TableOfContents; got != epub.DefaultLabels.TableOfContents {
+		t.Errorf("an unknown language must fall back to the defaults, got %q", got)
+	}
+}
+
+// Explicit labels win over the language.
+func TestExplicitLabelsWin(t *testing.T) {
+	b := sample()
+	b.Metadata.Language = "ru"
+	b.Labels = epub.Labels{TableOfContents: "Contents"}
+	r := open(t, b)
+
+	nav := read(t, r, "OEBPS/nav.xhtml")
+	if !strings.Contains(nav, "<h1>Contents</h1>") {
+		t.Errorf("explicit labels were ignored:\n%s", nav)
+	}
+	// Fields left empty still fall back to the English defaults, not to Russian.
+	if !strings.Contains(nav, "<li><span>Volume 1</span>") {
+		t.Errorf("an empty field should fall back to the defaults:\n%s", nav)
+	}
+}
