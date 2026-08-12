@@ -90,6 +90,7 @@ type Client struct {
 	retries int
 
 	token     string
+	cookie    string
 	baseDelay time.Duration
 	jitter    time.Duration
 	maxDelay  time.Duration
@@ -134,6 +135,16 @@ func WithSiteID(id string) Option { return func(c *Client) { c.siteID = id } }
 // does not sign in for you and never sees a password.
 func WithToken(token string) Option {
 	return func(c *Client) { c.token = strings.TrimSpace(token) }
+}
+
+// WithCookie sends a raw Cookie header, e.g. "ranobelib_session=...".
+//
+// It exists because the two ways this site authorises are not interchangeable:
+// the API may want a bearer token, while the browser holds a session cookie.
+// Whichever one a signed-in session actually carries is the one that works, so
+// both can be supplied and only what is set is sent.
+func WithCookie(cookie string) Option {
+	return func(c *Client) { c.cookie = strings.TrimSpace(cookie) }
 }
 
 // WithNotifier subscribes the caller to pause and retry notices.
@@ -260,6 +271,9 @@ func (c *Client) attempt(ctx context.Context, op, url, accept string) (body []by
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
+	if c.cookie != "" {
+		req.Header.Set("Cookie", c.cookie)
+	}
 
 	c.last = time.Now()
 	resp, err := c.httpc.Do(req)
@@ -287,7 +301,7 @@ func (c *Client) attempt(ctx context.Context, op, url, accept string) (body []by
 		message := strings.TrimSpace(string(snippet))
 		// The site hides restricted titles behind the same 404 it uses for
 		// missing ones, so say so rather than let the caller chase a typo.
-		if resp.StatusCode == http.StatusNotFound && c.token == "" {
+		if resp.StatusCode == http.StatusNotFound && c.token == "" && c.cookie == "" {
 			message += " (no token: titles that require an account look exactly like this)"
 		}
 		return nil, "", 0, &Error{

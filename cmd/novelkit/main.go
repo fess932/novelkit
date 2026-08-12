@@ -49,6 +49,8 @@ Options:
   --list-jobs         list the jobs in the cache
   --token <token>     access token of a signed-in account; some titles need one
                       (or set RANOBELIB_TOKEN)
+  --cookie <cookie>   Cookie header instead, when the site authorises that way
+                      (or set RANOBELIB_COOKIE)
   --yes               no questions (fullest translation, all chapters)
 
 A download stops at the first error; continue it with novelkit --resume
@@ -75,6 +77,7 @@ type options struct {
 	resumeSet   bool
 	yes         bool
 	token       string
+	cookie      string
 
 	args []string
 }
@@ -138,6 +141,7 @@ func parseFlags() (*options, error) {
 	fs.BoolVar(&o.refreshMeta, "refresh-meta", false, "")
 	fs.BoolVar(&o.yes, "yes", false, "")
 	fs.StringVar(&o.token, "token", os.Getenv("RANOBELIB_TOKEN"), "")
+	fs.StringVar(&o.cookie, "cookie", os.Getenv("RANOBELIB_COOKIE"), "")
 
 	// The standard flag package gives up at the first non-flag, while a book
 	// title reads better first. So the arguments are split by hand: flags go to
@@ -147,7 +151,7 @@ func parseFlags() (*options, error) {
 		"edition": true, "branch": true, "edition-name": true, "branch-name": true,
 		"from": true, "to": true, "out": true, "work-dir": true,
 		"delay": true, "jitter": true, "retries": true,
-		"max-image": true, "quality": true, "token": true,
+		"max-image": true, "quality": true, "token": true, "cookie": true,
 	}
 
 	var flags []string
@@ -200,6 +204,7 @@ func newApp(o *options) (*app, error) {
 		ranobelib.WithThrottle(time.Duration(o.delay)*time.Millisecond, time.Duration(o.jitter)*time.Millisecond),
 		ranobelib.WithRetries(o.retries),
 		ranobelib.WithToken(o.token),
+		ranobelib.WithCookie(o.cookie),
 		ranobelib.WithNotifier(func(n ranobelib.Notice) {
 			fmt.Printf("  · %s\n", n.Message)
 		}),

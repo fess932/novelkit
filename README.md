@@ -81,16 +81,19 @@ exactly as it does for a book that never existed. If a link opens in a signed-in
 browser but the tool reports "not found", that is what happened — and the error
 says so.
 
-Pass the access token of a session that is already signed in:
+Pass whatever a signed-in session actually carries. Open the book in a signed-in
+browser, look at a request to `api.cdnlibs.org` in the network tab, and copy the
+one that is there:
 
 ```sh
-export RANOBELIB_TOKEN='...'
+export RANOBELIB_TOKEN='...'          # if the request has an Authorization header
+export RANOBELIB_COOKIE='ranobelib_session=...'   # if it authorises by cookie
 novelkit https://ranobelib.me/ru/book/230300--...
 ```
 
-The token is taken from the browser (developer tools, the site's own session
-storage); nothing here signs in for you, and no password is ever involved. Keep
-it in the environment rather than in shell history.
+Both are credentials of an existing session — nothing here signs in for you, and
+no password is ever involved. Keep them in the environment rather than in shell
+history, and treat a session cookie as carefully as a password.
 
 ### Stopping and resuming
 
@@ -127,7 +130,7 @@ translation, not the chapter numbers printed on the site.
 | `--build-only` | assemble from the cache, download nothing |
 | `--refresh-meta` | refresh the blurb, author and genres |
 | `--resume [dir]` / `--list-jobs` | resuming and the job list |
-| `--token <token>` | account token; some titles are invisible without one |
+| `--token <token>` / `--cookie <cookie>` | credentials of a signed-in session; some titles are invisible without them |
 | `--yes` | no questions |
 
 # The library
@@ -214,8 +217,8 @@ error has to do something different in each case.
 `DecodeChapter` turns it back into a chapter, so fixing a parser never means
 downloading anything again.
 
-`ranobelib.WithToken` does the same for library users: the token rides along with
-every request, including file downloads.
+`ranobelib.WithToken` and `ranobelib.WithCookie` do the same for library users:
+whichever is set rides along with every request, including file downloads.
 
 A source paces its own requests: the core does not do it, and sites cut off
 clients that hammer them. `sources/ranobelib` ships a client that does this —

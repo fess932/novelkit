@@ -216,3 +216,23 @@ func TestNoTokenNoHeaderButAHint(t *testing.T) {
 		t.Errorf("a 404 without a token should mention it: %v", err)
 	}
 }
+
+// A session cookie is an alternative to a bearer token, not a replacement for it:
+// whichever is set gets sent, and setting neither sends neither.
+func TestCookieIsSent(t *testing.T) {
+	var auth, cookie string
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth, cookie = r.Header.Get("Authorization"), r.Header.Get("Cookie")
+		w.Write([]byte(`{"data":[]}`))
+	}), ranobelib.WithCookie(" ranobelib_session=abc "))
+
+	if _, err := c.Chapters(context.Background(), "1--test"); err != nil {
+		t.Fatal(err)
+	}
+	if cookie != "ranobelib_session=abc" {
+		t.Errorf("Cookie header: %q", cookie)
+	}
+	if auth != "" {
+		t.Errorf("Authorization sent without a token: %q", auth)
+	}
+}
