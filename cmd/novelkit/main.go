@@ -1,7 +1,8 @@
-// Команда novelkit — скачивание книг в EPUB поверх библиотеки novelkit.
+// Command novelkit downloads books into EPUB on top of the novelkit library.
 //
-// Библиотека про эту программу ничего не знает: весь интерактив, флаги и вывод
-// живут здесь, а вся работа делается пакетами novel, job, epub и imagex.
+// The library knows nothing about this program: the prompts, the flags and the
+// output live here, while the work is done by the novel, job, epub and imagex
+// packages.
 package main
 
 import (
@@ -11,7 +12,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -20,36 +20,36 @@ import (
 	"github.com/fess932/novelkit/sources/ranobelib"
 )
 
-const help = `novelkit — скачивание книг в EPUB
+const help = `novelkit — download books into EPUB
 
-Использование:
-  novelkit                          меню: выбрать действие и книгу из кэша
-  novelkit <ссылка|slug|название>   [опции]
-  novelkit --resume [каталог задания]
+Usage:
+  novelkit                        menu: pick an action and a book from the cache
+  novelkit <link|slug|title>      [options]
+  novelkit --resume [job dir]
   novelkit --list-jobs
 
-Опции:
-  --edition <id>      перевод (у ranobelib это ветка); иначе выбор из списка
-  --edition-name <ст> перевод по названию команды (подстрока)
-  --list-editions     показать переводы и выйти
-  --from <n>          с какой главы по счёту (1 — первая)
-  --to <n>            по какую главу включительно
-  --out <файл>        путь к .epub (по умолчанию — по названию книги)
-  --work-dir <кат>    каталог кэша заданий (по умолчанию .novelkit)
-  --delay <мс>        базовая пауза между запросами (по умолчанию 1500)
-  --jitter <мс>       случайная добавка к паузе (по умолчанию 700)
-  --retries <n>       повторов при сетевой ошибке или 429 (по умолчанию 4)
-  --no-images         не скачивать иллюстрации
-  --compress          сжать иллюстрации при сборке
-  --max-image <px>    большая сторона картинки при --compress (по умолчанию 1200)
-  --quality <1-100>   качество jpeg при --compress (по умолчанию 82)
-  --build-only        собрать EPUB из уже скачанного кэша
-  --refresh-meta      обновить описание, автора и жанры из карточки книги
-  --resume [каталог]  продолжить прерванную загрузку
-  --list-jobs         показать задания в кэше
-  --yes               без вопросов (берётся самый полный перевод и все главы)
+Options:
+  --edition <id>      translation to download; otherwise pick from a list
+  --edition-name <s>  translation by team name (substring)
+  --list-editions     print the translations and exit
+  --from <n>          first chapter by position (1 is the first)
+  --to <n>            last chapter, inclusive
+  --out <file>        path to the .epub (defaults to the book title)
+  --work-dir <dir>    job cache directory (default .novelkit)
+  --delay <ms>        base pause between requests (default 1500)
+  --jitter <ms>       random addition to the pause (default 700)
+  --retries <n>       retries on a network error or 429 (default 4)
+  --no-images         skip illustrations
+  --compress          shrink illustrations while assembling
+  --max-image <px>    longer side for --compress (default 1200)
+  --quality <1-100>   jpeg quality for --compress (default 82)
+  --build-only        assemble the EPUB from the cache, downloading nothing
+  --refresh-meta      refresh the blurb, author and genres from the book page
+  --resume [dir]      continue an interrupted download
+  --list-jobs         list the jobs in the cache
+  --yes               no questions (fullest translation, all chapters)
 
-Загрузка останавливается на первой ошибке; продолжить — novelkit --resume
+A download stops at the first error; continue it with novelkit --resume
 `
 
 type options struct {
@@ -79,10 +79,10 @@ type options struct {
 func main() {
 	if err := run(); err != nil {
 		if errors.Is(err, errHelp) {
-			return // справку уже показали
+			return // the help text has already been printed
 		}
 		if errors.Is(err, context.Canceled) {
-			fmt.Fprintln(os.Stderr, "\nПрервано.")
+			fmt.Fprintln(os.Stderr, "\nInterrupted.")
 			os.Exit(130)
 		}
 		fmt.Fprintf(os.Stderr, "\n✗ %v\n", err)
@@ -96,7 +96,7 @@ func run() error {
 		return err
 	}
 
-	// Ctrl+C должен останавливать загрузку, не теряя скачанного.
+	// Ctrl+C must stop the download without losing what is already fetched.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -135,10 +135,10 @@ func parseFlags() (*options, error) {
 	fs.BoolVar(&o.refreshMeta, "refresh-meta", false, "")
 	fs.BoolVar(&o.yes, "yes", false, "")
 
-	// Стандартный flag бросает разбор на первом не-флаге, а название книги
-	// удобнее писать первым. Поэтому раскладываем аргументы сами:
-	// флаги идут в разбор, всё остальное — в название книги.
-	// Заодно --resume может идти и без значения, и с каталогом задания.
+	// The standard flag package gives up at the first non-flag, while a book
+	// title reads better first. So the arguments are split by hand: flags go to
+	// the parser, everything else is the book. --resume is special too — it
+	// takes either a job directory or nothing at all.
 	withValue := map[string]bool{
 		"edition": true, "branch": true, "edition-name": true, "branch-name": true,
 		"from": true, "to": true, "out": true, "work-dir": true,
@@ -181,10 +181,10 @@ func parseFlags() (*options, error) {
 	return o, nil
 }
 
-// errHelp означает «показали справку и уходим», а не ошибку.
+// errHelp means "the help text was printed, now leave", not a failure.
 var errHelp = errors.New("help")
 
-// app связывает вместе источник, кэш заданий и вывод.
+// app ties the source, the job cache and the output together.
 type app struct {
 	opts   *options
 	source novel.Source
@@ -223,7 +223,7 @@ func (a *app) run(ctx context.Context) error {
 	return a.menu(ctx)
 }
 
-// outputName подбирает имя файла книги.
+// outputName picks the book's file name.
 func outputName(title, edition string, many bool) string {
 	name := safeFileName(title)
 	if many && edition != "" {
@@ -241,22 +241,17 @@ func safeFileName(s string) string {
 	return out
 }
 
-func workDir(o *options) string {
-	if filepath.IsAbs(o.workDir) {
-		return o.workDir
-	}
-	return o.workDir
-}
+func workDir(o *options) string { return o.workDir }
 
-// fmtDuration печатает длительность по-русски.
+// fmtDuration prints a duration in a compact human form.
 func fmtDuration(d time.Duration) string {
 	s := int(d.Round(time.Second).Seconds())
 	switch {
 	case s < 60:
-		return fmt.Sprintf("%d с", s)
+		return fmt.Sprintf("%ds", s)
 	case s < 3600:
-		return fmt.Sprintf("%d мин %d с", s/60, s%60)
+		return fmt.Sprintf("%dm %ds", s/60, s%60)
 	default:
-		return fmt.Sprintf("%d ч %d мин", s/3600, (s%3600)/60)
+		return fmt.Sprintf("%dh %dm", s/3600, (s%3600)/60)
 	}
 }

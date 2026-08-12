@@ -13,27 +13,27 @@ import (
 	"github.com/fess932/novelkit/novel"
 )
 
-// BuildOptions настраивают сборку книги.
+// BuildOptions tune how a book is assembled.
 type BuildOptions struct {
-	// Optimizer пережимает иллюстрации. nil — класть оригиналы как есть.
+	// Optimizer re-compresses illustrations. nil puts the originals in as they are.
 	Optimizer imagex.Optimizer
-	// CSS подменяет оформление книги.
+	// CSS replaces the book's styling.
 	CSS string
-	// OnWarning вызывается на некритичных бедах: пропущенная глава, битая картинка.
+	// OnWarning is called for non-fatal trouble: a skipped chapter, a broken picture.
 	OnWarning func(string)
 }
 
-// BuildResult — что получилось.
+// BuildResult is what came out.
 type BuildResult struct {
-	Size     int64 // размер книги в байтах
-	Chapters int   // сколько глав попало в книгу
-	Images   int   // сколько картинок попало в книгу
-	Missing  int   // сколько глав пропущено: их нет в кэше
-	// ImagesBefore и ImagesAfter — суммарный вес картинок до и после сжатия.
+	Size     int64 // book size in bytes
+	Chapters int   // chapters that made it into the book
+	Images   int   // pictures that made it into the book
+	Missing  int   // chapters skipped because the cache has none
+	// ImagesBefore and ImagesAfter are the total picture weight before and after compression.
 	ImagesBefore, ImagesAfter int64
 }
 
-// BuildFile собирает книгу в файл.
+// BuildFile assembles the book into a file.
 func (j *Job) BuildFile(ctx context.Context, src novel.Source, path string, opts BuildOptions) (BuildResult, error) {
 	if dir := filepath.Dir(path); dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -51,17 +51,18 @@ func (j *Job) BuildFile(ctx context.Context, src novel.Source, path string, opts
 	return res, err
 }
 
-// Build собирает книгу из того, что лежит в кэше задания. В сеть не ходит.
+// Build assembles the book from whatever the job cache holds. It never touches
+// the network.
 //
-// Источник нужен, чтобы разобрать сохранённые ответы: сырой вид понимает
-// только тот сайт, который его отдал.
+// The source is needed to decode the stored responses: only the site that
+// produced them understands their raw form.
 //
-// Главы, которых в кэше нет, пропускаются и считаются в BuildResult.Missing —
-// так недокачанную книгу всё равно можно собрать и почитать.
+// Chapters missing from the cache are skipped and counted in BuildResult.Missing,
+// so a half-downloaded book can still be assembled and read.
 func (j *Job) Build(ctx context.Context, src novel.Source, w io.Writer, opts BuildOptions) (BuildResult, error) {
 	st := j.State()
 	if st.Source.ID != src.ID() {
-		return BuildResult{}, fmt.Errorf("job: задание сделано источником %q, а передан %q", st.Source.ID, src.ID())
+		return BuildResult{}, fmt.Errorf("job: the job belongs to source %q, but %q was passed", st.Source.ID, src.ID())
 	}
 
 	optimizer := opts.Optimizer
@@ -75,10 +76,10 @@ func (j *Job) Build(ctx context.Context, src novel.Source, w io.Writer, opts Bui
 	}
 
 	var res BuildResult
-	// Картинки собираются по мере встречи в тексте: имя внутри книги может
-	// отличаться от имени в кэше, если сжатие сменило формат.
+	// Pictures are collected as the text mentions them: the name inside the book
+	// may differ from the cached one when compression changed the format.
 	packed := map[string]epub.Image{}
-	inBook := map[string]string{} // файл в кэше -> имя внутри книги
+	inBook := map[string]string{} // cached file -> name inside the book
 
 	resolver := novel.ResolverFunc(func(img novel.Image) (string, bool) {
 		asset, ok := st.Assets[img.URL]
@@ -92,13 +93,13 @@ func (j *Job) Build(ctx context.Context, src novel.Source, w io.Writer, opts Bui
 		src := j.assetPath(asset.File)
 		info, err := os.Stat(src)
 		if err != nil {
-			return "", false // картинка не скачалась — из разметки её убираем
+			return "", false // the picture never downloaded, so drop it from the markup
 		}
 		res.ImagesBefore += info.Size()
 
 		out, err := optimizer.Optimize(src)
 		if err != nil {
-			warn("картинку не удалось пережать (%s): %v", asset.File, err)
+			warn("could not re-compress a picture (%s): %v", asset.File, err)
 			out = imagex.Result{Path: src, Name: asset.File, MediaType: imagex.MediaType(asset.Ext), Size: info.Size()}
 		}
 		data, err := os.ReadFile(out.Path)
@@ -139,10 +140,10 @@ func (j *Job) Build(ctx context.Context, src novel.Source, w io.Writer, opts Bui
 	}
 
 	if len(book.Chapters) == 0 {
-		return res, fmt.Errorf("job: нет ни одной скачанной главы — собирать нечего")
+		return res, fmt.Errorf("job: no chapters downloaded, nothing to assemble")
 	}
 	if res.Missing > 0 {
-		warn("в книгу не попало глав: %d (нет в кэше)", res.Missing)
+		warn("chapters left out of the book: %d (not in the cache)", res.Missing)
 	}
 
 	for _, img := range packed {
@@ -152,7 +153,7 @@ func (j *Job) Build(ctx context.Context, src novel.Source, w io.Writer, opts Bui
 		if cover, err := j.buildCover(*st.Cover, optimizer); err == nil {
 			book.Cover = cover
 		} else {
-			warn("обложку не удалось приложить: %v", err)
+			warn("could not attach the cover: %v", err)
 		}
 	}
 

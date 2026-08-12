@@ -9,11 +9,11 @@ import (
 	"github.com/fess932/novelkit/novel"
 )
 
-// Attachment — вложение главы. Тип живёт в markup: именно он разбирает
-// разметку и ищет в ней картинки.
+// Attachment is a chapter attachment. The type lives in markup, which is what
+// parses the markup and finds the pictures in it.
 type Attachment = markup.Attachment
 
-// Named — сущность со своим именем: команда, автор, жанр, издатель.
+// Named is anything with a name of its own: a team, an author, a genre, a publisher.
 type Named struct {
 	ID      int    `json:"id"`
 	Name    string `json:"name"`
@@ -21,7 +21,7 @@ type Named struct {
 	Slug    string `json:"slug_url"`
 }
 
-// Title возвращает русское имя, если оно есть, иначе оригинальное.
+// Title returns the Russian name when there is one, otherwise the original.
 func (n Named) Title() string {
 	if n.RusName != "" {
 		return n.RusName
@@ -29,13 +29,13 @@ func (n Named) Title() string {
 	return n.Name
 }
 
-// Labeled — поля вида {"id":2,"label":"Завершён"}.
+// Labeled covers fields shaped like {"id":2,"label":"Completed"}.
 type Labeled struct {
 	ID    int    `json:"id"`
 	Label string `json:"label"`
 }
 
-// Cover — обложка книги в нескольких размерах.
+// Cover is the book cover in several sizes.
 type Cover struct {
 	Filename  string `json:"filename"`
 	Thumbnail string `json:"thumbnail"`
@@ -43,7 +43,7 @@ type Cover struct {
 	Md        string `json:"md"`
 }
 
-// URL возвращает самую крупную доступную версию обложки.
+// URL returns the largest available version of the cover.
 func (c Cover) URL() string {
 	for _, u := range []string{c.Default, c.Md, c.Thumbnail} {
 		if u != "" {
@@ -53,7 +53,7 @@ func (c Cover) URL() string {
 	return ""
 }
 
-// Manga — карточка книги.
+// Manga is a book's details.
 type Manga struct {
 	ID      int    `json:"id"`
 	Name    string `json:"name"`
@@ -63,8 +63,8 @@ type Manga struct {
 	SlugURL string `json:"slug_url"`
 	Cover   Cover  `json:"cover"`
 
-	// SummaryRaw приходит то ProseMirror-документом, то строкой,
-	// поэтому хранится сырым; разбирает его Summary.
+	// SummaryRaw arrives as a ProseMirror document one time and a string the
+	// next, so it is kept raw; Summary parses it.
 	SummaryRaw  json.RawMessage `json:"summary"`
 	Authors     []Named         `json:"authors"`
 	Publisher   []Named         `json:"publisher"`
@@ -75,10 +75,10 @@ type Manga struct {
 	Type        Labeled         `json:"type"`
 }
 
-// Summary разбирает аннотацию книги.
+// Summary parses the book blurb.
 func (m Manga) Summary() novel.Content { return markup.Auto(m.SummaryRaw, nil) }
 
-// Title — название книги: русское, иначе английское, иначе оригинальное.
+// Title picks the book's name: Russian, else English, else the original.
 func (m Manga) Title() string {
 	for _, s := range []string{m.RusName, m.EngName, m.Name} {
 		if s != "" {
@@ -88,15 +88,15 @@ func (m Manga) Title() string {
 	return m.SlugURL
 }
 
-// URL возвращает ссылку на книгу на сайте.
+// URL returns the link to the book on the site.
 func (m Manga) URL(site string) string {
 	return strings.TrimRight(site, "/") + "/ru/book/" + m.SlugURL
 }
 
-// AuthorNames возвращает имена авторов в удобном для метаданных виде.
+// AuthorNames returns author names ready for book metadata.
 func (m Manga) AuthorNames() []string { return titles(m.Authors) }
 
-// GenreNames возвращает названия жанров.
+// GenreNames returns the genre names.
 func (m Manga) GenreNames() []string { return titles(m.Genres) }
 
 func titles(list []Named) []string {
@@ -109,9 +109,9 @@ func titles(list []Named) []string {
 	return out
 }
 
-// ChapterBranch — ветка перевода в том виде, в каком она указана у главы.
-// Здесь перечислена только команда, залившая эту главу; полный состав ветки
-// отдаёт Client.Branches.
+// ChapterBranch is a translation branch as a chapter lists it. Only the team
+// that posted this particular chapter appears here; Client.Branches has the
+// full line-up.
 type ChapterBranch struct {
 	BranchID *int    `json:"branch_id"`
 	Teams    []Named `json:"teams"`
@@ -121,8 +121,8 @@ type ChapterBranch struct {
 	} `json:"user"`
 }
 
-// ID возвращает идентификатор ветки; 0 означает ветку без идентификатора
-// (у книги с единственным переводом сайт присылает null).
+// ID returns the branch identifier; 0 means a branch without one (for a book
+// with a single translation the site sends null).
 func (b ChapterBranch) ID() int {
 	if b.BranchID == nil {
 		return 0
@@ -130,7 +130,7 @@ func (b ChapterBranch) ID() int {
 	return *b.BranchID
 }
 
-// ChapterInfo — глава в списке глав книги.
+// ChapterInfo is one entry of a book's chapter list.
 type ChapterInfo struct {
 	ID       int             `json:"id"`
 	Index    int             `json:"index"`
@@ -140,7 +140,7 @@ type ChapterInfo struct {
 	Branches []ChapterBranch `json:"branches"`
 }
 
-// InBranch сообщает, есть ли эта глава в указанной ветке перевода.
+// InBranch reports whether this chapter exists in the given branch.
 func (ci ChapterInfo) InBranch(branchID int) bool {
 	for _, b := range ci.Branches {
 		if b.ID() == branchID {
@@ -150,7 +150,7 @@ func (ci ChapterInfo) InBranch(branchID int) bool {
 	return false
 }
 
-// Info приводит главу к общему виду.
+// Info converts the chapter to its common shape.
 func (ci ChapterInfo) Info() novel.ChapterInfo {
 	return novel.ChapterInfo{
 		ID:     strconv.Itoa(ci.ID),
@@ -161,17 +161,17 @@ func (ci ChapterInfo) Info() novel.ChapterInfo {
 	}
 }
 
-// Title собирает человекочитаемый заголовок главы.
+// Title builds a readable chapter heading.
 func (ci ChapterInfo) Title() string { return ci.Info().Title() }
 
-// ChapterRef адресует главу: том и номер внутри выбранной ветки перевода.
+// ChapterRef addresses a chapter: volume and number within the chosen branch.
 type ChapterRef struct {
 	Volume   string
 	Number   string
-	BranchID int // 0 — ветка не указывается
+	BranchID int // 0 leaves the branch unspecified
 }
 
-// Chapter — глава вместе с текстом.
+// Chapter is a chapter together with its text.
 type Chapter struct {
 	ID          int             `json:"id"`
 	MangaID     int             `json:"manga_id"`
@@ -185,10 +185,10 @@ type Chapter struct {
 	Attachments []Attachment    `json:"attachments"`
 }
 
-// Content разбирает текст главы: сайт присылает то документ, то html-строку.
+// Content parses the chapter text: the site sends a document one time and an HTML string the next.
 func (c Chapter) Content() novel.Content { return markup.Auto(c.ContentRaw, c.Attachments) }
 
-// Info приводит главу к общему виду.
+// Info converts the chapter to its common shape.
 func (c Chapter) Info() novel.ChapterInfo {
 	return novel.ChapterInfo{
 		ID:     strconv.Itoa(c.ID),
@@ -199,27 +199,27 @@ func (c Chapter) Info() novel.ChapterInfo {
 	}
 }
 
-// Title собирает заголовок главы.
+// Title builds the chapter heading.
 func (c Chapter) Title() string { return c.Info().Title() }
 
-// BranchCard — карточка ветки перевода из Client.Branches:
-// собственное имя ветки и все её команды. Именно так подписаны вкладки на сайте.
+// BranchCard is a branch as Client.Branches describes it: its own name and all
+// of its teams. This is exactly how the tabs on the site are labelled.
 type BranchCard struct {
 	ID    int     `json:"id"`
 	Name  string  `json:"name"`
 	Teams []Named `json:"teams"`
 }
 
-// Branch — ветка перевода, сведённая из списка глав и карточек веток.
+// Branch is a translation branch merged from the chapter list and the branch cards.
 type Branch struct {
-	ID        int      // 0 — ветка без идентификатора
-	Name      string   // внутреннее имя ветки на сайте
-	Teams     []string // команды перевода
-	Uploaders []string // те, кто заливал главы
-	Count     int      // сколько глав в ветке
+	ID        int      // 0 means a branch without an identifier
+	Name      string   // the site's internal name for the branch
+	Teams     []string // translation teams
+	Uploaders []string // the people who posted the chapters
+	Count     int      // how many chapters the branch has
 }
 
-// Edition приводит ветку к общему виду.
+// Edition converts the branch to its common shape.
 func (b Branch) Edition() novel.Edition {
 	id := ""
 	if b.ID != 0 {
@@ -234,8 +234,8 @@ func (b Branch) Edition() novel.Edition {
 	}
 }
 
-// Label — подпись ветки для показа пользователю.
+// Label is the branch caption for humans.
 func (b Branch) Label() string { return b.Edition().Label() }
 
-// Translators — команды и заливавшие: годится для метаданных книги.
+// Translators lists teams and uploaders, ready for book metadata.
 func (b Branch) Translators() []string { return b.Edition().Translators() }

@@ -9,9 +9,9 @@ import (
 	"strings"
 )
 
-// Интерактив держится на raw-режиме терминала, который включается через stty.
-// Так CLI обходится без зависимостей: библиотеке они не нужны, а тянуть их
-// ради одного меню незачем.
+// The menus rely on raw terminal mode, switched on through stty. That keeps the
+// CLI dependency-free: the library needs none, and pulling one in for a single
+// menu would be a poor trade.
 
 const (
 	esc     = "\x1b["
@@ -25,7 +25,7 @@ const (
 
 var stdin = bufio.NewReader(os.Stdin)
 
-// interactive сообщает, есть ли живой терминал: без него меню не показываем.
+// interactive reports whether there is a live terminal; without one, no menus.
 func interactive() bool {
 	fi, err := os.Stdin.Stat()
 	if err != nil {
@@ -51,42 +51,42 @@ func ask(question, fallback string) string {
 }
 
 func confirm(question string, def bool) bool {
-	hint := "д/Н"
+	hint := "y/N"
 	if def {
-		hint = "Д/н"
+		hint = "Y/n"
 	}
 	answer := strings.ToLower(ask(fmt.Sprintf("%s [%s] ", question, hint), ""))
 	if answer == "" {
 		return def
 	}
 	switch answer {
-	case "д", "да", "y", "yes", "da":
+	case "y", "yes":
 		return true
 	default:
 		return false
 	}
 }
 
-// Item — пункт меню.
+// Item is one menu entry.
 type Item struct {
 	Label string
 	Hint  string
 }
 
-// stty дёргает системную утилиту: это единственный способ переключить терминал
-// в raw-режим, не втягивая внешних зависимостей.
+// stty shells out to the system tool: it is the only way to put the terminal
+// into raw mode without pulling in a dependency.
 func stty(args ...string) error {
 	cmd := exec.Command("stty", args...)
 	cmd.Stdin = os.Stdin
 	return cmd.Run()
 }
 
-// selectItem показывает меню и возвращает номер выбранного пункта.
-// Без терминала спрашивает номер обычным вводом.
+// selectItem shows a menu and returns the index of the chosen entry.
+// Without a terminal it falls back to asking for a number.
 func selectItem(title string, items []Item, def int) (int, error) {
 	switch {
 	case len(items) == 0:
-		return 0, fmt.Errorf("пустой список выбора")
+		return 0, fmt.Errorf("empty menu")
 	case len(items) == 1:
 		return 0, nil
 	case !interactive():
@@ -94,7 +94,7 @@ func selectItem(title string, items []Item, def int) (int, error) {
 	}
 
 	if err := stty("-echo", "cbreak"); err != nil {
-		// Терминал не поддался — не беда, спросим номер.
+		// The terminal would not cooperate; asking for a number will do.
 		return selectNumeric(title, items, def)
 	}
 	defer func() {
@@ -135,23 +135,23 @@ func selectItem(title string, items []Item, def int) (int, error) {
 	buf := make([]byte, 1)
 	for {
 		if _, err := os.Stdin.Read(buf); err != nil {
-			return 0, fmt.Errorf("выбор прерван")
+			return 0, fmt.Errorf("selection interrupted")
 		}
 		switch buf[0] {
 		case '\r', '\n', ' ':
 			return index, nil
 		case 3: // Ctrl+C
-			return 0, fmt.Errorf("прервано пользователем")
+			return 0, fmt.Errorf("interrupted by the user")
 		case 'q', 'Q':
-			return 0, fmt.Errorf("выбор отменён")
+			return 0, fmt.Errorf("selection cancelled")
 		case 'k':
 			move(-1)
 		case 'j':
 			move(1)
-		case 0x1b: // управляющая последовательность
+		case 0x1b: // escape sequence
 			seq := make([]byte, 2)
 			if _, err := os.Stdin.Read(seq); err != nil {
-				return 0, fmt.Errorf("выбор прерван")
+				return 0, fmt.Errorf("selection interrupted")
 			}
 			if seq[0] != '[' {
 				continue
@@ -173,7 +173,7 @@ func selectItem(title string, items []Item, def int) (int, error) {
 				move(visible)
 			}
 		default:
-			// Номер пункта можно набрать цифрами, в том числе двузначный.
+			// An entry can also be picked by typing its number, two digits included.
 			if buf[0] >= '0' && buf[0] <= '9' {
 				typed += string(buf[0])
 				if n, err := strconv.Atoi(typed); err == nil && n >= 1 && n <= len(items) {
@@ -199,13 +199,13 @@ func selectNumeric(title string, items []Item, def int) (int, error) {
 		fmt.Printf("  %s %2d. %s%s\n", mark, i+1, it.Label, hintOf(it))
 	}
 	for range 5 {
-		raw := ask(fmt.Sprintf("Номер [%d]: ", def+1), strconv.Itoa(def+1))
+		raw := ask(fmt.Sprintf("Number [%d]: ", def+1), strconv.Itoa(def+1))
 		if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= len(items) {
 			return n - 1, nil
 		}
-		fmt.Println("Нужен номер из списка.")
+		fmt.Println("Enter a number from the list.")
 	}
-	return 0, fmt.Errorf("не выбран пункт списка")
+	return 0, fmt.Errorf("no entry chosen")
 }
 
 func hintOf(it Item) string {
@@ -219,19 +219,19 @@ func frame(title string, items []Item, index, offset, visible int) []string {
 	width := termCols() - 1
 	lines := []string{"\n" + title}
 	if offset > 0 {
-		lines = append(lines, fmt.Sprintf("%s   ↑ ещё %d%s", dim, offset, reset))
+		lines = append(lines, fmt.Sprintf("%s   ↑ %d more%s", dim, offset, reset))
 	}
 	for i := offset; i < min(len(items), offset+visible); i++ {
 		lines = append(lines, itemLine(items[i], i, i == index, width))
 	}
 	if rest := len(items) - (offset + visible); rest > 0 {
-		lines = append(lines, fmt.Sprintf("%s   ↓ ещё %d%s", dim, rest, reset))
+		lines = append(lines, fmt.Sprintf("%s   ↓ %d more%s", dim, rest, reset))
 	}
-	return append(lines, dim+"   ↑/↓ — выбор, Enter — подтвердить, q — выход"+reset)
+	return append(lines, dim+"   ↑/↓ to move, Enter to confirm, q to quit"+reset)
 }
 
-// itemLine сначала обрезает строку по ширине терминала и только потом красит:
-// иначе счёт символов уехал бы на невидимых управляющих последовательностях.
+// itemLine truncates to the terminal width first and colours afterwards:
+// counting characters through invisible escape sequences would go wrong.
 func itemLine(it Item, i int, active bool, width int) string {
 	prefix := fmt.Sprintf("    %2d. ", i+1)
 	if active {
@@ -256,7 +256,7 @@ func itemLine(it Item, i int, active bool, width int) string {
 func termCols() int { return termSize(1, 80) }
 func termRows() int { return termSize(0, 24) }
 
-// termSize спрашивает у stty размер окна; при неудаче отдаёт значение по умолчанию.
+// termSize asks stty for the window size and falls back to a default.
 func termSize(field, def int) int {
 	out, err := exec.Command("stty", "size").Output()
 	if err != nil {

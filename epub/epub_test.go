@@ -14,20 +14,20 @@ import (
 func sample() *epub.Book {
 	return &epub.Book{
 		Metadata: epub.Metadata{
-			Title:         "Тестовая книга",
+			Title:         "Test Book",
 			OriginalTitle: "Test Book",
-			Authors:       []string{"Автор"},
-			Translators:   []string{"Команда", "Переводчик"},
-			Genres:        []string{"Фэнтези"},
-			Publisher:     "Издатель",
+			Authors:       []string{"Author"},
+			Translators:   []string{"Team", "Translator"},
+			Genres:        []string{"Fantasy"},
+			Publisher:     "Publisher",
 			Date:          "2015",
-			Description:   "Первый абзац.\n\nВторой абзац.",
+			Description:   "First paragraph.\n\nSecond paragraph.",
 			Source:        "https://ranobelib.me/ru/book/1--test",
 		},
 		Cover: &epub.Image{Name: "cover.jpg", MediaType: "image/jpeg", Data: []byte("jpegdata")},
 		Chapters: []epub.Chapter{
-			{Volume: "1", Number: "1", Title: "Глава 1. Начало", Body: "<p>Текст</p>"},
-			{Volume: "2", Number: "2", Title: "Глава 2. Продолжение", Body: `<div class="img"><img src="../images/a.jpg" alt=""/></div>`},
+			{Volume: "1", Number: "1", Title: "Chapter 1. The Beginning", Body: "<p>Text</p>"},
+			{Volume: "2", Number: "2", Title: "Chapter 2. Onwards", Body: `<div class="img"><img src="../images/a.jpg" alt=""/></div>`},
 		},
 		Images: []epub.Image{{Name: "a.jpg", MediaType: "image/jpeg", Data: []byte("imagedata")}},
 	}
@@ -37,11 +37,11 @@ func open(t *testing.T, b *epub.Book) *zip.Reader {
 	t.Helper()
 	data, err := b.Bytes()
 	if err != nil {
-		t.Fatalf("сборка книги: %v", err)
+		t.Fatalf("assembling the book: %v", err)
 	}
 	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		t.Fatalf("книга не открывается как zip: %v", err)
+		t.Fatalf("the book does not open as a zip: %v", err)
 	}
 	return r
 }
@@ -50,7 +50,7 @@ func read(t *testing.T, r *zip.Reader, name string) string {
 	t.Helper()
 	f, err := r.Open(name)
 	if err != nil {
-		t.Fatalf("нет файла %s: %v", name, err)
+		t.Fatalf("no file %s: %v", name, err)
 	}
 	defer f.Close()
 	data, err := io.ReadAll(f)
@@ -60,22 +60,22 @@ func read(t *testing.T, r *zip.Reader, name string) string {
 	return string(data)
 }
 
-// EPUB требует, чтобы mimetype лежал первым и без сжатия.
+// EPUB requires mimetype to come first and be stored uncompressed.
 func TestMimetypeFirstAndStored(t *testing.T) {
 	r := open(t, sample())
 
 	first := r.File[0]
 	if first.Name != "mimetype" {
-		t.Fatalf("первым в архиве лежит %q, а должен mimetype", first.Name)
+		t.Fatalf("the first archive entry is %q, it must be mimetype", first.Name)
 	}
 	if first.Method != zip.Store {
-		t.Errorf("mimetype сжат, а должен лежать как есть")
+		t.Errorf("mimetype is compressed, it must be stored")
 	}
 	if first.Flags&0x8 != 0 {
-		t.Errorf("у mimetype выставлен флаг дескриптора данных — валидаторы на это ругаются")
+		t.Errorf("mimetype has the data descriptor flag set, which validators complain about")
 	}
 	if got := read(t, r, "mimetype"); got != "application/epub+zip" {
-		t.Errorf("содержимое mimetype: %q", got)
+		t.Errorf("mimetype content: %q", got)
 	}
 }
 
@@ -97,13 +97,13 @@ func TestEveryXMLIsWellFormed(t *testing.T) {
 				break
 			}
 			if err != nil {
-				t.Errorf("%s: невалидный XML: %v", f.Name, err)
+				t.Errorf("%s: invalid XML: %v", f.Name, err)
 				break
 			}
 		}
 	}
 	if checked < 6 {
-		t.Errorf("проверено подозрительно мало файлов: %d", checked)
+		t.Errorf("suspiciously few files checked: %d", checked)
 	}
 }
 
@@ -117,51 +117,51 @@ func TestManifestMatchesArchive(t *testing.T) {
 	}
 	for _, href := range hrefs(opf) {
 		if !inArchive[href] {
-			t.Errorf("в манифесте есть %s, а файла в архиве нет", href)
+			t.Errorf("the manifest lists %s but the archive has no such file", href)
 		}
 	}
 
 	for _, want := range []string{
-		"<dc:title>Тестовая книга</dc:title>",
-		"<dc:creator id=\"creator-0\">Автор</dc:creator>",
-		"<dc:contributor id=\"contrib-0\">Команда</dc:contributor>",
-		"<dc:publisher>Издатель</dc:publisher>",
+		"<dc:title>Test Book</dc:title>",
+		"<dc:creator id=\"creator-0\">Author</dc:creator>",
+		"<dc:contributor id=\"contrib-0\">Team</dc:contributor>",
+		"<dc:publisher>Publisher</dc:publisher>",
 		`properties="cover-image"`,
 		`<meta name="cover" content="cover-image"/>`,
 	} {
 		if !strings.Contains(opf, want) {
-			t.Errorf("в content.opf нет %q", want)
+			t.Errorf("content.opf is missing %q", want)
 		}
 	}
-	// Аннотация должна попасть и в метаданные, и на титульную страницу.
-	if !strings.Contains(opf, "<dc:description>Первый абзац.") {
-		t.Errorf("аннотация не попала в метаданные")
+	// The blurb must reach both the metadata and the title page.
+	if !strings.Contains(opf, "<dc:description>First paragraph.") {
+		t.Errorf("the blurb never reached the metadata")
 	}
-	if title := read(t, r, "OEBPS/text/title.xhtml"); !strings.Contains(title, "Аннотация") {
-		t.Errorf("аннотация не попала на титульную страницу")
+	if title := read(t, r, "OEBPS/text/title.xhtml"); !strings.Contains(title, "Annotation") {
+		t.Errorf("the blurb never reached the title page")
 	}
 }
 
-// Тома в оглавлении группируются, если томов больше одного.
+// The contents group by volume when there is more than one.
 func TestNavGroupsVolumes(t *testing.T) {
 	r := open(t, sample())
 	nav := read(t, r, "OEBPS/nav.xhtml")
 
-	for _, want := range []string{"<li><span>Том 1</span>", "<li><span>Том 2</span>", "Глава 1. Начало"} {
+	for _, want := range []string{"<li><span>Volume 1</span>", "<li><span>Volume 2</span>", "Chapter 1. The Beginning"} {
 		if !strings.Contains(nav, want) {
-			t.Errorf("в оглавлении нет %q", want)
+			t.Errorf("the contents are missing %q", want)
 		}
 	}
 	ncx := read(t, r, "OEBPS/toc.ncx")
-	if strings.Count(ncx, "<navPoint") != 3 { // титул + две главы
-		t.Errorf("в toc.ncx неверное число пунктов:\n%s", ncx)
+	if strings.Count(ncx, "<navPoint") != 3 { // title page plus two chapters
+		t.Errorf("wrong number of entries in toc.ncx:\n%s", ncx)
 	}
 }
 
 func TestBookWithoutChaptersFails(t *testing.T) {
-	b := &epub.Book{Metadata: epub.Metadata{Title: "Пусто"}}
+	b := &epub.Book{Metadata: epub.Metadata{Title: "Empty"}}
 	if _, err := b.Bytes(); err == nil {
-		t.Fatal("книга без глав должна давать ошибку")
+		t.Fatal("a book with no chapters must be an error")
 	}
 }
 

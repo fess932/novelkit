@@ -1,9 +1,10 @@
-// Package ranobelib — клиент к публичному API ranobelib.me.
+// Package ranobelib is a client for the public ranobelib.me API and the
+// novel.Source implementation built on top of it.
 //
-// Клиент сам держит темп запросов: обращения идут строго последовательно,
-// между ними выдерживается пауза со случайным разбросом, а на 429/503
-// пауза временно растёт. Это единственный способ не словить бан на сайте,
-// поэтому темп зашит в клиент, а не оставлен на совесть вызывающего.
+// The client paces itself: requests go out strictly one at a time, with a pause
+// and a random jitter between them, and the pause grows for a while after a 429
+// or 503. That is the only way not to get cut off, so the pacing lives inside
+// the client rather than being left to the caller.
 //
 //	c := ranobelib.New()
 //	m, err := c.Manga(ctx, "14841--beginning-after-the-end-novel")
@@ -22,7 +23,7 @@ import (
 	"time"
 )
 
-// Адреса и идентификатор сайта по умолчанию.
+// Default addresses and site identifier.
 const (
 	DefaultAPIURL  = "https://api.cdnlibs.org/api"
 	DefaultSiteURL = "https://ranobelib.me"
@@ -32,16 +33,16 @@ const (
 		"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
-// ErrNotFound возвращается для 404: главы нет, слаг неверный, книга удалена.
-var ErrNotFound = errors.New("ranobelib: не найдено")
+// ErrNotFound is returned for a 404: no such chapter, a wrong slug, a removed book.
+var ErrNotFound = errors.New("ranobelib: not found")
 
-// Error — ошибка обращения к API.
+// Error is a failed API call.
 type Error struct {
-	Op         string // метод библиотеки, например "Chapter"
+	Op         string // library method, e.g. "Chapter"
 	URL        string
-	StatusCode int    // 0, если до ответа дело не дошло
-	Message    string // текст из тела ответа, если он был
-	Retryable  bool   // имеет ли смысл повторить запрос
+	StatusCode int    // 0 when no response arrived
+	Message    string // text from the response body, when there was one
+	Retryable  bool   // whether retrying makes sense
 	Err        error
 }
 
@@ -65,13 +66,13 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error { return e.Err }
 
-// Is позволяет писать errors.Is(err, ranobelib.ErrNotFound).
+// Is makes errors.Is work with both ErrNotFound and novel.ErrNotFound.
 func (e *Error) Is(target error) bool {
 	return target == ErrNotFound && e.StatusCode == http.StatusNotFound
 }
 
-// Notice — сообщение о том, что клиент притормозил или повторяет запрос.
-// Полезно показать пользователю, чтобы долгая пауза не выглядела зависанием.
+// Notice tells the caller that the client has slowed down or is retrying.
+// Worth showing to a user, so a long pause does not look like a hang.
 type Notice struct {
 	Kind    string // "throttle", "retry", "network"
 	Message string
@@ -79,7 +80,7 @@ type Notice struct {
 	Attempt int
 }
 
-// Client — потокобезопасный клиент API. Нулевое значение непригодно, используйте New.
+// Client is a concurrency-safe API client. The zero value is not usable; call New.
 type Client struct {
 	httpc   *http.Client
 	apiURL  string
@@ -93,41 +94,41 @@ type Client struct {
 	maxDelay  time.Duration
 	notify    func(Notice)
 
-	mu    sync.Mutex // сериализует запросы: параллельных обращений к сайту быть не должно
+	mu    sync.Mutex // serialises requests: the site must never see parallel calls
 	delay time.Duration
 	last  time.Time
 }
 
-// Option настраивает клиент.
+// Option configures a client.
 type Option func(*Client)
 
-// WithHTTPClient подменяет http.Client (таймауты, прокси, транспорт в тестах).
+// WithHTTPClient swaps the http.Client: timeouts, proxies, a test transport.
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.httpc = h } }
 
-// WithThrottle задаёт паузу между запросами: base плюс случайная добавка до jitter.
+// WithThrottle sets the pause between requests: base plus a random addition up to jitter.
 func WithThrottle(base, jitter time.Duration) Option {
 	return func(c *Client) {
 		c.baseDelay, c.jitter, c.delay = base, jitter, base
 	}
 }
 
-// WithRetries задаёт число повторов при сетевой ошибке, 429, 503 и 5xx.
+// WithRetries sets how many times a network error, 429, 503 or 5xx is retried.
 func WithRetries(n int) Option { return func(c *Client) { c.retries = n } }
 
-// WithUserAgent подменяет User-Agent.
+// WithUserAgent overrides the User-Agent.
 func WithUserAgent(ua string) Option { return func(c *Client) { c.ua = ua } }
 
-// WithAPIURL и WithSiteURL нужны для тестов и зеркал.
+// WithAPIURL and WithSiteURL are for tests and mirrors.
 func WithAPIURL(u string) Option  { return func(c *Client) { c.apiURL = strings.TrimRight(u, "/") } }
 func WithSiteURL(u string) Option { return func(c *Client) { c.siteURL = strings.TrimRight(u, "/") } }
 
-// WithSiteID переключает раздел: "3" — ранобэ, "1" — манга.
+// WithSiteID switches the section: "3" for novels, "1" for manga.
 func WithSiteID(id string) Option { return func(c *Client) { c.siteID = id } }
 
-// WithNotifier подписывает вызывающего на сообщения о паузах и повторах.
+// WithNotifier subscribes the caller to pause and retry notices.
 func WithNotifier(fn func(Notice)) Option { return func(c *Client) { c.notify = fn } }
 
-// New создаёт клиент с разумными настройками темпа: 1.5 с плюс до 0.7 с разброса.
+// New creates a client with sane pacing: 1.5s plus up to 0.7s of jitter.
 func New(opts ...Option) *Client {
 	c := &Client{
 		httpc:     &http.Client{Timeout: 60 * time.Second},
@@ -147,7 +148,7 @@ func New(opts ...Option) *Client {
 	return c
 }
 
-// SiteURL возвращает адрес сайта: пригодится, чтобы собрать ссылку на книгу.
+// SiteURL returns the site address, handy for building a link to a book.
 func (c *Client) SiteURL() string { return c.siteURL }
 
 func (c *Client) emit(n Notice) {
@@ -156,7 +157,7 @@ func (c *Client) emit(n Notice) {
 	}
 }
 
-// wait выдерживает паузу перед очередным запросом. Вызывается под c.mu.
+// wait holds the pause before the next request. Called with c.mu held.
 func (c *Client) wait(ctx context.Context) error {
 	pause := c.delay
 	if c.jitter > 0 {
@@ -168,12 +169,12 @@ func (c *Client) wait(ctx context.Context) error {
 	return nil
 }
 
-// slowDown вызывается после 429/503: темп режется до конца работы клиента,
-// speedUp постепенно возвращает его назад после успешных запросов.
+// slowDown runs after a 429 or 503: the pace drops, and speedUp walks it back
+// up again as requests start succeeding.
 func (c *Client) slowDown() {
 	next := time.Duration(float64(max(c.delay, time.Second)) * 1.7)
 	c.delay = min(next, c.maxDelay)
-	c.emit(Notice{Kind: "throttle", Message: "рейт-лимит: увеличена пауза между запросами", Wait: c.delay})
+	c.emit(Notice{Kind: "throttle", Message: "rate limited: increased the pause between requests", Wait: c.delay})
 }
 
 func (c *Client) speedUp() {
@@ -196,7 +197,7 @@ func sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// get выполняет запрос с учётом темпа и повторов. accept — желаемый тип ответа.
+// get performs a request, honouring the pacing and retries. accept is the wanted response type.
 func (c *Client) get(ctx context.Context, op, url, accept string) ([]byte, string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -233,7 +234,7 @@ func (c *Client) get(ctx context.Context, op, url, accept string) ([]byte, strin
 	}
 }
 
-// attempt — одна попытка запроса. Вызывается под c.mu.
+// attempt is a single request try. Called with c.mu held.
 func (c *Client) attempt(ctx context.Context, op, url, accept string) (body []byte, ctype string, retryAfter time.Duration, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -249,7 +250,7 @@ func (c *Client) attempt(ctx context.Context, op, url, accept string) (body []by
 	c.last = time.Now()
 	resp, err := c.httpc.Do(req)
 	if err != nil {
-		// Отмену контекста наружу отдаём как есть, остальное — повторяемая сетевая ошибка.
+		// A cancelled context is passed through as is; anything else is a retryable network error.
 		if ctx.Err() != nil {
 			return nil, "", 0, ctx.Err()
 		}
@@ -262,12 +263,12 @@ func (c *Client) attempt(ctx context.Context, op, url, accept string) (body []by
 		c.slowDown()
 		return nil, "", parseRetryAfter(resp.Header.Get("Retry-After")), &Error{
 			Op: op, URL: url, StatusCode: resp.StatusCode, Retryable: true,
-			Message: "сработал рейт-лимит",
+			Message: "rate limited",
 		}
 	case resp.StatusCode >= 500:
 		return nil, "", 0, &Error{Op: op, URL: url, StatusCode: resp.StatusCode, Retryable: true}
 	case resp.StatusCode >= 400:
-		// 4xx не повторяем: платная глава, опечатка в слаге, удалённая книга.
+		// 4xx is not retried: a paid chapter, a typo in the slug, a removed book.
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, "", 0, &Error{
 			Op: op, URL: url, StatusCode: resp.StatusCode,

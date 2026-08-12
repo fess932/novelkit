@@ -9,62 +9,63 @@ import (
 	"sync"
 )
 
-// ErrNotFound возвращается, когда книги или главы не существует:
-// неверный идентификатор, удалённая или платная глава.
-var ErrNotFound = errors.New("novel: не найдено")
+// ErrNotFound reports that a book or chapter does not exist: a wrong id,
+// a removed chapter, or one that is behind a paywall.
+var ErrNotFound = errors.New("novel: not found")
 
-// ErrUnsupported возвращается, когда ссылку не берёт ни один источник.
-var ErrUnsupported = errors.New("novel: сайт не поддерживается")
+// ErrUnsupported reports that no registered source handles this link, or that
+// a source does not implement the requested operation.
+var ErrUnsupported = errors.New("novel: unsupported")
 
-// Source — сайт, откуда качаются книги.
+// Source is a site to download books from.
 //
-// Всё, что нужно для поддержки нового сайта: реализовать этот интерфейс.
-// Остальное (кэш, докачка, сборка EPUB, сжатие картинок) уже написано и
-// работает с любым источником одинаково.
+// Implementing this interface is all that supporting a new site takes; caching,
+// resumable downloads, EPUB assembly and image compression are already written
+// and behave the same for every source.
 //
-// Реализация обязана сама выдерживать вежливый темп запросов: ядро за неё
-// этого не делает, а сайты за частые обращения закрывают доступ.
+// An implementation must pace its own requests: the core does not do it, and
+// sites cut off clients that hammer them.
 type Source interface {
-	// ID — короткое имя источника, например "ranobelib".
-	// Оно попадает в кэш задания, поэтому менять его нельзя.
+	// ID is a short name for the source, e.g. "ranobelib". It is written into
+	// the job cache, so it must stay stable.
 	ID() string
 
-	// Supports сообщает, берётся ли источник за такую ссылку.
+	// Supports reports whether this source handles the given link.
 	Supports(rawURL string) bool
 
-	// ParseRef достаёт идентификатор книги из ссылки на сайт.
+	// ParseRef extracts a book identifier from a link to the site.
 	ParseRef(rawURL string) (bookID string, ok bool)
 
-	// Search ищет книги по названию. Источник, где поиска нет,
-	// вправе вернуть ErrUnsupported.
+	// Search looks books up by title. A source without search may return
+	// ErrUnsupported.
 	Search(ctx context.Context, query string) ([]Book, error)
 
-	// Book отдаёт карточку книги вместе со списком переводов.
+	// Book returns the title's details along with its translations.
 	Book(ctx context.Context, bookID string) (*Book, error)
 
-	// Chapters отдаёт главы выбранного перевода в порядке чтения.
+	// Chapters returns the chapters of one translation, in reading order.
 	Chapters(ctx context.Context, bookID, editionID string) ([]ChapterInfo, error)
 
-	// Chapter качает одну главу вместе с текстом.
+	// Chapter downloads a single chapter together with its text.
 	Chapter(ctx context.Context, bookID, editionID string, ci ChapterInfo) (*Chapter, error)
 
-	// DecodeChapter восстанавливает главу из сохранённого Chapter.Raw.
+	// DecodeChapter restores a chapter from a stored Chapter.Raw.
 	DecodeChapter(raw []byte) (*Chapter, error)
 
-	// Fetch качает файл по ссылке из разметки: обложку или иллюстрацию.
-	// Относительные адреса источник достраивает сам.
+	// Fetch downloads a file referenced by the markup: a cover or an
+	// illustration. The source resolves relative addresses itself.
 	Fetch(ctx context.Context, rawURL string) (data []byte, contentType string, err error)
 }
 
-// Registry — набор подключённых источников.
-// Нулевое значение готово к работе; безопасен для одновременного доступа.
+// Registry is a set of plugged-in sources.
+// The zero value is ready to use and safe for concurrent access.
 type Registry struct {
 	mu      sync.RWMutex
 	sources map[string]Source
 	order   []string
 }
 
-// Register добавляет источник. Повторная регистрация того же ID заменяет прежний.
+// Register adds a source. Registering the same ID again replaces the previous one.
 func (r *Registry) Register(s Source) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -77,7 +78,7 @@ func (r *Registry) Register(s Source) {
 	r.sources[s.ID()] = s
 }
 
-// Get возвращает источник по идентификатору.
+// Get returns a source by its identifier.
 func (r *Registry) Get(id string) (Source, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -85,7 +86,7 @@ func (r *Registry) Get(id string) (Source, bool) {
 	return s, ok
 }
 
-// For подбирает источник под ссылку.
+// For picks the source that handles the given link.
 func (r *Registry) For(rawURL string) (Source, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -97,7 +98,7 @@ func (r *Registry) For(rawURL string) (Source, bool) {
 	return nil, false
 }
 
-// Sources перечисляет подключённые источники в порядке регистрации.
+// Sources lists the registered sources in registration order.
 func (r *Registry) Sources() []Source {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -108,7 +109,7 @@ func (r *Registry) Sources() []Source {
 	return out
 }
 
-// Resolve разбирает ссылку: находит источник и достаёт из неё идентификатор книги.
+// Resolve parses a link: it finds the source and extracts the book identifier.
 func (r *Registry) Resolve(rawURL string) (Source, string, error) {
 	s, ok := r.For(rawURL)
 	if !ok {
@@ -116,14 +117,14 @@ func (r *Registry) Resolve(rawURL string) (Source, string, error) {
 	}
 	id, ok := s.ParseRef(rawURL)
 	if !ok {
-		return nil, "", fmt.Errorf("%w: не разобрать ссылку %s", ErrUnsupported, rawURL)
+		return nil, "", fmt.Errorf("%w: cannot parse link %s", ErrUnsupported, rawURL)
 	}
 	return s, id, nil
 }
 
-// SearchAll спрашивает все источники разом и складывает находки вместе.
-// Источники без поиска пропускаются; ошибка возвращается, только если
-// не ответил вообще никто.
+// SearchAll queries every source at once and collects the results per source.
+// Sources without search are skipped; an error comes back only when nothing
+// answered at all.
 func (r *Registry) SearchAll(ctx context.Context, query string) (map[string][]Book, error) {
 	sources := r.Sources()
 
@@ -163,18 +164,18 @@ func (r *Registry) SearchAll(ctx context.Context, query string) (map[string][]Bo
 	return out, nil
 }
 
-// SortEditions ставит впереди переводы с наибольшим числом глав —
-// это почти всегда то, что нужно предложить первым.
+// SortEditions puts the translations with the most chapters first, which is
+// almost always the one worth offering.
 func SortEditions(list []Edition) {
 	sort.SliceStable(list, func(i, j int) bool { return list[i].Chapters > list[j].Chapters })
 }
 
-// SortChapters приводит главы к порядку чтения.
+// SortChapters puts chapters into reading order.
 func SortChapters(list []ChapterInfo) {
 	sort.SliceStable(list, func(i, j int) bool { return list[i].Index < list[j].Index })
 }
 
-// NormalizeURL приводит ссылку к виду, удобному для сравнения хостов.
+// NormalizeURL trims the scheme and www prefix so hosts can be compared.
 func NormalizeURL(raw string) string {
 	s := strings.TrimSpace(raw)
 	s = strings.TrimPrefix(s, "https://")

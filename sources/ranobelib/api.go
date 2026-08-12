@@ -9,23 +9,23 @@ import (
 	"strings"
 )
 
-// Поля карточки книги, которые запрашиваются дополнительно.
+// Extra fields requested along with a book's details.
 var mangaFields = []string{"summary", "authors", "publisher", "genres", "tags", "teams", "releaseDate"}
 
-// envelope снимает обёртку {"data": ...}, в которую сайт кладёт любой ответ.
+// envelope strips the {"data": ...} wrapper the site puts around every response.
 func envelope[T any](op, u string, data []byte) (T, error) {
 	var env struct {
 		Data T `json:"data"`
 	}
 	if err := json.Unmarshal(data, &env); err != nil {
 		var zero T
-		return zero, &Error{Op: op, URL: u, Message: "не разобрать ответ", Err: err}
+		return zero, &Error{Op: op, URL: u, Message: "cannot decode the response", Err: err}
 	}
 	return env.Data, nil
 }
 
-// Search ищет книги по названию. Работает по подстроке: опечаток не прощает,
-// зато понимает и русское, и оригинальное название.
+// Search looks books up by title. It matches substrings: typos are not
+// forgiven, but both the Russian and the original title work.
 func (c *Client) Search(ctx context.Context, query string) ([]Manga, error) {
 	u := c.apiURL + "/manga?" + url.Values{
 		"q":         {query},
@@ -39,7 +39,7 @@ func (c *Client) Search(ctx context.Context, query string) ([]Manga, error) {
 	return envelope[[]Manga]("Search", u, body)
 }
 
-// Manga отдаёт карточку книги. slug — вида "14841--beginning-after-the-end-novel".
+// Manga returns a book's details. slug looks like "14841--beginning-after-the-end-novel".
 func (c *Client) Manga(ctx context.Context, slug string) (*Manga, error) {
 	q := make([]string, 0, len(mangaFields))
 	for _, f := range mangaFields {
@@ -58,7 +58,7 @@ func (c *Client) Manga(ctx context.Context, slug string) (*Manga, error) {
 	return &m, nil
 }
 
-// Chapters отдаёт список глав книги — сразу по всем веткам перевода.
+// Chapters returns a book's chapter list, covering every translation branch at once.
 func (c *Client) Chapters(ctx context.Context, slug string) ([]ChapterInfo, error) {
 	u := c.apiURL + "/manga/" + url.PathEscape(slug) + "/chapters"
 
@@ -69,9 +69,9 @@ func (c *Client) Chapters(ctx context.Context, slug string) ([]ChapterInfo, erro
 	return envelope[[]ChapterInfo]("Chapters", u, body)
 }
 
-// Branches отдаёт карточки веток перевода по числовому id книги.
-// Именно отсюда берутся подписи вкладок на сайте: у ветки бывает несколько команд,
-// а в списке глав указана только та, что залила конкретную главу.
+// Branches returns the branch cards for a numeric book id. This is where the
+// site's tab captions come from: a branch may have several teams, while the
+// chapter list names only the one that posted a given chapter.
 func (c *Client) Branches(ctx context.Context, mangaID int) ([]BranchCard, error) {
 	u := c.apiURL + "/branches/" + strconv.Itoa(mangaID)
 
@@ -82,7 +82,7 @@ func (c *Client) Branches(ctx context.Context, mangaID int) ([]BranchCard, error
 	return envelope[[]BranchCard]("Branches", u, body)
 }
 
-// Chapter отдаёт главу вместе с текстом.
+// Chapter returns a chapter together with its text.
 func (c *Client) Chapter(ctx context.Context, slug string, ref ChapterRef) (*Chapter, error) {
 	v := url.Values{"volume": {ref.Volume}, "number": {ref.Number}}
 	if ref.BranchID != 0 {
@@ -101,13 +101,14 @@ func (c *Client) Chapter(ctx context.Context, slug string, ref ChapterRef) (*Cha
 	return &ch, nil
 }
 
-// Fetch качает произвольный файл — обложку или иллюстрацию главы.
-// Относительный путь достраивается до адреса сайта: на CDN обложек картинки глав отдают 403.
+// Fetch downloads an arbitrary file: a cover or a chapter illustration.
+// Relative paths are resolved against the site, because the cover CDN answers
+// 403 for chapter pictures.
 func (c *Client) Fetch(ctx context.Context, rawURL string) (data []byte, contentType string, err error) {
 	return c.get(ctx, "Fetch", c.AbsoluteURL(rawURL), "*/*")
 }
 
-// AbsoluteURL достраивает относительный путь до полного адреса сайта.
+// AbsoluteURL resolves a relative path against the site address.
 func (c *Client) AbsoluteURL(raw string) string {
 	switch {
 	case strings.HasPrefix(raw, "http://"), strings.HasPrefix(raw, "https://"):
@@ -121,11 +122,11 @@ func (c *Client) AbsoluteURL(raw string) string {
 	}
 }
 
-// CollectBranches сводит ветки перевода: карточки дают названия команд,
-// список глав — количество глав и тех, кто их заливал.
+// CollectBranches merges translation branches: the cards supply team names,
+// the chapter list supplies the counts and the uploaders.
 //
-// Ветка, у которой на сайте есть вкладка, но нет ни одной главы, попадает
-// в результат с Count == 0 — скачивать в ней нечего.
+// A branch that has a tab on the site but no chapters at all comes back with
+// Count == 0 — there is nothing to download there.
 func CollectBranches(chapters []ChapterInfo, cards []BranchCard) []Branch {
 	order := make([]int, 0, len(cards)+4)
 	byID := make(map[int]*Branch, len(cards)+4)
@@ -152,7 +153,7 @@ func CollectBranches(chapters []ChapterInfo, cards []BranchCard) []Branch {
 		for _, cb := range ch.Branches {
 			b := get(cb.ID())
 			b.Count++
-			// Команда главы — запасная подпись, если у ветки команды не проставлены.
+			// A chapter's team is the fallback caption when the branch lists none.
 			for _, t := range cb.Teams {
 				b.Teams = appendUnique(b.Teams, t.Title())
 			}
@@ -164,12 +165,12 @@ func CollectBranches(chapters []ChapterInfo, cards []BranchCard) []Branch {
 	for _, id := range order {
 		out = append(out, *byID[id])
 	}
-	// Самая полная ветка первой — это почти всегда то, что нужно.
+	// The fullest branch first: that is almost always the one wanted.
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Count > out[j].Count })
 	return out
 }
 
-// ChaptersOfBranch отбирает главы одной ветки в порядке чтения.
+// ChaptersOfBranch selects one branch's chapters in reading order.
 func ChaptersOfBranch(chapters []ChapterInfo, branchID int) []ChapterInfo {
 	out := make([]ChapterInfo, 0, len(chapters))
 	for _, ch := range chapters {
@@ -193,8 +194,8 @@ func appendUnique(list []string, v string) []string {
 	return append(list, v)
 }
 
-// ParseSlug достаёт слаг книги из ссылки или возвращает строку как есть,
-// если она уже похожа на слаг ("14841--beginning-after-the-end-novel").
+// ParseSlug extracts a book slug from a link, or passes the string through when
+// it already looks like one ("14841--beginning-after-the-end-novel").
 func ParseSlug(input string) (string, bool) {
 	s := strings.TrimSpace(input)
 	if i := strings.Index(s, "ranobelib.me/"); i >= 0 {
@@ -209,7 +210,7 @@ func ParseSlug(input string) (string, bool) {
 			s = unescaped
 		}
 	}
-	// Слаг сайта всегда начинается с числового идентификатора книги.
+	// A slug on this site always starts with the numeric book id.
 	id, rest, ok := strings.Cut(s, "--")
 	if !ok || rest == "" {
 		return "", false

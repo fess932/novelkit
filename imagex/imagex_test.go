@@ -11,13 +11,13 @@ import (
 	"github.com/fess932/novelkit/imagex"
 )
 
-// samplePNG рисует картинку, похожую на настоящую иллюстрацию: плавные переходы
-// с мелким шумом. Ровный узор не годится — такой PNG сжимает лучше, чем JPEG,
-// и проверять было бы нечего.
+// samplePNG draws something like a real illustration: smooth gradients with a
+// little noise. A clean pattern would not do — PNG compresses that better than
+// JPEG does, leaving nothing to check.
 func samplePNG(t *testing.T, path string, w, h int, alpha bool) {
 	t.Helper()
 	img := image.NewNRGBA(image.Rect(0, 0, w, h))
-	seed := uint32(12345) // шум детерминированный: тест должен быть повторяемым
+	seed := uint32(12345) // deterministic noise: the test must be repeatable
 	for y := range h {
 		for x := range w {
 			seed = seed*1664525 + 1013904223
@@ -45,7 +45,7 @@ func samplePNG(t *testing.T, path string, w, h int, alpha bool) {
 	}
 }
 
-// flatPNG рисует однотонную картинку.
+// flatPNG draws a single-colour picture.
 func flatPNG(t *testing.T, path string, w, h int) {
 	t.Helper()
 	img := image.NewNRGBA(image.Rect(0, 0, w, h))
@@ -83,14 +83,14 @@ func TestResizerShrinksAndConverts(t *testing.T) {
 	}
 
 	if !res.Changed {
-		t.Fatal("картинка должна была пережаться")
+		t.Fatal("the picture should have been re-compressed")
 	}
 	if filepath.Ext(res.Name) != ".jpg" {
-		t.Errorf("непрозрачная картинка должна стать jpeg, а стала %s", res.Name)
+		t.Errorf("an opaque picture should become jpeg, got %s", res.Name)
 	}
 	info, _ := os.Stat(src)
 	if res.Size >= info.Size() {
-		t.Errorf("результат не легче исходника: %d против %d", res.Size, info.Size())
+		t.Errorf("the result is not lighter than the source: %d vs %d", res.Size, info.Size())
 	}
 
 	f, err := os.Open(res.Path)
@@ -100,17 +100,17 @@ func TestResizerShrinksAndConverts(t *testing.T) {
 	defer f.Close()
 	cfg, format, err := image.DecodeConfig(f)
 	if err != nil {
-		t.Fatalf("результат не читается: %v", err)
+		t.Fatalf("the result does not decode: %v", err)
 	}
 	if format != "jpeg" {
-		t.Errorf("формат результата: %s", format)
+		t.Errorf("result format: %s", format)
 	}
 	if max(cfg.Width, cfg.Height) != 1200 {
-		t.Errorf("размер после уменьшения: %dx%d", cfg.Width, cfg.Height)
+		t.Errorf("size after scaling: %dx%d", cfg.Width, cfg.Height)
 	}
 }
 
-// Прозрачную картинку в jpeg переводить нельзя — фон стал бы чёрным.
+// A transparent picture must not become jpeg: its background would turn black.
 func TestTransparentStaysPNG(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "alpha.png")
@@ -125,12 +125,12 @@ func TestTransparentStaysPNG(t *testing.T) {
 		t.Fatal(err)
 	}
 	if filepath.Ext(res.Name) != ".png" {
-		t.Errorf("картинка с прозрачностью должна остаться png, а стала %s", res.Name)
+		t.Errorf("a transparent picture should stay png, got %s", res.Name)
 	}
 }
 
-// Если пережатая версия выходит тяжелее исходной, берётся исходная.
-// Ровная заливка — как раз такой случай: PNG хранит её в сотне байт.
+// When the compressed version comes out heavier, the original is kept.
+// A flat fill is exactly that case: PNG stores it in a hundred bytes.
 func TestKeepsOriginalWhenCompressionLoses(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "flat.png")
@@ -145,7 +145,7 @@ func TestKeepsOriginalWhenCompressionLoses(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.Changed || res.Path != src {
-		t.Errorf("ожидался исходник как есть, получено %+v", res)
+		t.Errorf("expected the untouched original, got %+v", res)
 	}
 }
 
@@ -159,6 +159,6 @@ func TestPassthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.Path != src || res.Changed {
-		t.Errorf("Passthrough не должен ничего менять: %+v", res)
+		t.Errorf("Passthrough must change nothing: %+v", res)
 	}
 }

@@ -1,9 +1,9 @@
-// Package markup приводит разметку сайтов к виду, пригодному для книги.
+// Package markup turns site markup into something a book can hold.
 //
-// Здесь лежат готовые кирпичи, из которых собирается поддержка нового сайта:
-// HTML — для сайтов, отдающих главу разметкой, ProseMirror — для тех, кто
-// отдаёт документ редактора. Оба реализуют novel.Content, поэтому источнику
-// достаточно выбрать подходящий и не писать разбор заново.
+// These are ready-made building blocks for supporting a new site: HTML for
+// sites that serve chapters as markup, ProseMirror for those that serve editor
+// documents. Both implement novel.Content, so a source rarely has to write a
+// parser of its own.
 package markup
 
 import (
@@ -14,7 +14,7 @@ import (
 	"github.com/fess932/novelkit/novel"
 )
 
-// Attachment — вложение главы: иллюстрация, на которую ссылается разметка.
+// Attachment is a chapter attachment — an illustration the markup refers to.
 type Attachment struct {
 	Name      string `json:"name"`
 	Filename  string `json:"filename"`
@@ -24,18 +24,18 @@ type Attachment struct {
 	Height    int    `json:"height"`
 }
 
-// Empty — пустое содержимое.
+// Empty is content with nothing in it.
 type Empty struct{}
 
-// XHTML реализует novel.Content.
+// XHTML implements novel.Content.
 func (Empty) XHTML(novel.ImageResolver) string { return "" }
 
-// PlainText реализует novel.Content.
+// PlainText implements novel.Content.
 func (Empty) PlainText() string { return "" }
 
-// Auto выбирает разбор по форме значения: объект разбирается как
-// ProseMirror-документ, строка — как HTML. Сайты на одном движке присылают
-// то одно, то другое даже в пределах одной книги.
+// Auto picks the parser by the shape of the value: an object is read as a
+// ProseMirror document, a string as HTML. Sites built on the same engine send
+// both, sometimes within a single book.
 func Auto(raw json.RawMessage, attachments []Attachment) novel.Content {
 	t := bytes.TrimSpace(raw)
 	if len(t) == 0 || bytes.Equal(t, []byte("null")) {
@@ -48,7 +48,7 @@ func Auto(raw json.RawMessage, attachments []Attachment) novel.Content {
 			return Empty{}
 		}
 		s = strings.TrimSpace(s)
-		// Иногда документ приезжает строкой с JSON внутри.
+		// Sometimes the document arrives as a string with JSON inside.
 		if strings.HasPrefix(s, "{") {
 			if doc := ProseMirror(json.RawMessage(s), attachments); !isEmptyDoc(doc) {
 				return doc
@@ -73,9 +73,9 @@ func isEmptyDoc(c novel.Content) bool {
 	return !ok || doc == nil || doc.root.Type == ""
 }
 
-// collapse убирает лишние переводы строк и пробелы по краям.
-// Неразрывные пробелы становятся обычными: в метаданных книги они только мешают
-// (поиск по названию их не находит), а в разметке главы сохраняются как есть.
+// collapse squeezes blank lines and trims the edges. Non-breaking spaces become
+// ordinary ones: they only get in the way of book metadata (a title search will
+// not match them), while chapter markup keeps them as they are.
 func collapse(s string) string {
 	s = strings.ReplaceAll(s, " ", " ")
 	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")

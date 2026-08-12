@@ -9,8 +9,8 @@ import (
 	"github.com/fess932/novelkit/novel"
 )
 
-// parse имитирует то, как содержимое приезжает внутри ответа API:
-// сырым значением, форма которого заранее неизвестна.
+// parse mimics how content arrives inside an API response: a raw value whose
+// shape is not known in advance.
 func parse(raw string, att ...markup.Attachment) novel.Content {
 	return markup.Auto(json.RawMessage(raw), att)
 }
@@ -36,7 +36,7 @@ func TestProseMirrorXHTML(t *testing.T) {
 		"<blockquote>\n<p>цитата</p>\n</blockquote>",
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf("нет фрагмента %q в:\n%s", want, got)
+			t.Errorf("missing fragment %q in:\n%s", want, got)
 		}
 	}
 }
@@ -55,14 +55,14 @@ func TestProseMirrorImages(t *testing.T) {
 	}))
 
 	if len(seen) != 1 || seen[0].URL != "/uploads/pic.jpg" || seen[0].Ext != "jpg" {
-		t.Fatalf("картинка до резолвера не дошла: %+v", seen)
+		t.Fatalf("the resolver never saw the picture: %+v", seen)
 	}
 	if !strings.Contains(got, `<img src="../images/local.jpg"`) {
-		t.Errorf("нет картинки в разметке:\n%s", got)
+		t.Errorf("no picture in the markup:\n%s", got)
 	}
-	// Подпись — это примечание переводчика, терять его нельзя.
+	// The caption is a translator's note and must survive.
 	if !strings.Contains(got, "Прим. пер.") {
-		t.Errorf("потеряна подпись к иллюстрации:\n%s", got)
+		t.Errorf("the illustration caption was lost:\n%s", got)
 	}
 }
 
@@ -71,11 +71,11 @@ func TestImagesDroppedWhenResolverRefuses(t *testing.T) {
 	att := markup.Attachment{Name: "pic", URL: "/uploads/pic.jpg"}
 
 	for name, resolver := range map[string]novel.ImageResolver{
-		"отказ":         novel.DropImages,
-		"нет резолвера": nil,
+		"declining resolver": novel.DropImages,
+		"no resolver":        nil,
 	} {
 		if got := parse(doc, att).XHTML(resolver); strings.Contains(got, "<img") {
-			t.Errorf("%s: картинка осталась в разметке:\n%s", name, got)
+			t.Errorf("%s: the picture stayed in the markup:\n%s", name, got)
 		}
 	}
 }
@@ -89,25 +89,25 @@ func TestHTMLContent(t *testing.T) {
 		want string
 		msg  string
 	}{
-		{"<p>Первый «абзац»</p>", "сущности не раскрыты"},
-		{"<strong>жирный</strong>", "b не превратился в strong"},
-		{"Развёрнутый", "текст неизвестной обёртки потерян"},
+		{"<p>Первый «абзац»</p>", "entities were not decoded"},
+		{"<strong>жирный</strong>", "b did not become strong"},
+		{"Развёрнутый", "text inside an unknown wrapper was lost"},
 	}
 	for _, c := range checks {
 		if !strings.Contains(got, c.want) {
-			t.Errorf("%s: нет %q в:\n%s", c.msg, c.want, got)
+			t.Errorf("%s: missing %q in:\n%s", c.msg, c.want, got)
 		}
 	}
 	if strings.Contains(got, "alert") || strings.Contains(got, "data-paragraph") {
-		t.Errorf("в разметку просочился скрипт или служебный атрибут:\n%s", got)
+		t.Errorf("a script or bookkeeping attribute leaked into the markup:\n%s", got)
 	}
 	if strings.Count(got, "<em>") != strings.Count(got, "</em>") {
-		t.Errorf("незакрытый тег не закрылся:\n%s", got)
+		t.Errorf("an unclosed tag was not closed:\n%s", got)
 	}
 }
 
-// Аннотация книги приезжает документом ProseMirror. Раньше на этом месте
-// в метаданные попадало "[object Object]".
+// A book blurb arrives as a ProseMirror document. This used to put
+// "[object Object]" into the metadata.
 func TestPlainTextFromDocument(t *testing.T) {
 	doc := `{"type":"doc","content":[
 		{"type":"paragraph","content":[{"type":"text","text":"Первый абзац."}]},
@@ -117,14 +117,14 @@ func TestPlainTextFromDocument(t *testing.T) {
 	got := parse(doc).PlainText()
 	want := "Первый абзац.\n\nВторой абзац."
 	if got != want {
-		t.Errorf("аннотация разобрана неверно:\nполучено: %q\nожидалось: %q", got, want)
+		t.Errorf("blurb parsed wrong:\ngot:  %q\nwant: %q", got, want)
 	}
 }
 
 func TestPlainTextFromHTML(t *testing.T) {
 	got := parse(`"<p>Абзац&nbsp;один</p><p>Абзац два</p>"`).PlainText()
 	if !strings.Contains(got, "Абзац один") || !strings.Contains(got, "Абзац два") {
-		t.Errorf("текст из html разобран неверно: %q", got)
+		t.Errorf("text from html parsed wrong: %q", got)
 	}
 }
 
@@ -132,15 +132,15 @@ func TestEmptyContent(t *testing.T) {
 	for _, raw := range []string{`null`, `""`, `{}`, `[]`} {
 		c := parse(raw)
 		if got := c.XHTML(nil); got != "" {
-			t.Errorf("для %s ожидалась пустая разметка, получено %q", raw, got)
+			t.Errorf("%s should give empty markup, got %q", raw, got)
 		}
 		if got := c.PlainText(); got != "" {
-			t.Errorf("для %s ожидался пустой текст, получено %q", raw, got)
+			t.Errorf("%s should give empty text, got %q", raw, got)
 		}
 	}
 }
 
-// Документ, приехавший строкой с JSON внутри, должен разбираться как документ.
+// A document that arrives as a string with JSON inside must parse as a document.
 func TestDocumentInsideString(t *testing.T) {
 	inner := `{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"текст"}]}]}`
 	wrapped, err := json.Marshal(inner)
@@ -148,6 +148,6 @@ func TestDocumentInsideString(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := markup.Auto(wrapped, nil).XHTML(nil); got != "<p>текст</p>" {
-		t.Errorf("документ в строке разобран как %q", got)
+		t.Errorf("a document inside a string parsed as %q", got)
 	}
 }

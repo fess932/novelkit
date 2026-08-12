@@ -11,13 +11,14 @@ import (
 	"github.com/fess932/novelkit/novel"
 )
 
-// ID источника. Попадает в кэш заданий, поэтому менять его нельзя.
+// SourceID is written into the job cache, so it must stay stable.
 const SourceID = "ranobelib"
 
-// Source подключает ranobelib.me к ядру: реализует novel.Source.
+// Source plugs ranobelib.me into the core: it implements novel.Source.
 //
-// Список глав книги кэшируется в памяти на время жизни источника: карточка
-// книги и выборка глав перевода иначе дёргали бы сайт дважды за одно и то же.
+// A book's chapter list is cached in memory for the lifetime of the source;
+// otherwise fetching the book details and then one translation's chapters would
+// ask the site for the same thing twice.
 type Source struct {
 	c *Client
 
@@ -25,37 +26,37 @@ type Source struct {
 	chapters map[string][]ChapterInfo
 }
 
-// NewSource создаёт источник поверх нового клиента.
+// NewSource creates a source on top of a fresh client.
 func NewSource(opts ...Option) *Source {
 	return SourceFor(New(opts...))
 }
 
-// SourceFor создаёт источник поверх готового клиента —
-// например, с подменённым http.Client в тестах.
+// SourceFor creates a source on top of an existing client, e.g. one with a
+// swapped http.Client in tests.
 func SourceFor(c *Client) *Source {
 	return &Source{c: c, chapters: map[string][]ChapterInfo{}}
 }
 
-// Client отдаёт клиент API: у сайта есть возможности, которых нет в общем интерфейсе.
+// Client exposes the API client: the site can do things the common interface cannot.
 func (s *Source) Client() *Client { return s.c }
 
-// ID реализует novel.Source.
+// ID implements novel.Source.
 func (s *Source) ID() string { return SourceID }
 
-// Supports реализует novel.Source.
+// Supports implements novel.Source.
 func (s *Source) Supports(rawURL string) bool {
 	if strings.Contains(novel.NormalizeURL(rawURL), "ranobelib.me/") {
 		return true
 	}
-	// Голый слаг вида "14841--beginning-after-the-end-novel" тоже наш.
+	// A bare slug such as "14841--beginning-after-the-end-novel" is ours too.
 	_, ok := ParseSlug(rawURL)
 	return ok && !strings.Contains(rawURL, "://")
 }
 
-// ParseRef реализует novel.Source.
+// ParseRef implements novel.Source.
 func (s *Source) ParseRef(rawURL string) (string, bool) { return ParseSlug(rawURL) }
 
-// Search реализует novel.Source.
+// Search implements novel.Source.
 func (s *Source) Search(ctx context.Context, query string) ([]novel.Book, error) {
 	found, err := s.c.Search(ctx, query)
 	if err != nil {
@@ -68,7 +69,7 @@ func (s *Source) Search(ctx context.Context, query string) ([]novel.Book, error)
 	return out, nil
 }
 
-// Book реализует novel.Source: карточка книги вместе со списком переводов.
+// Book implements novel.Source: a book's details along with its translations.
 func (s *Source) Book(ctx context.Context, bookID string) (*novel.Book, error) {
 	manga, err := s.c.Manga(ctx, bookID)
 	if err != nil {
@@ -78,7 +79,7 @@ func (s *Source) Book(ctx context.Context, bookID string) (*novel.Book, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Карточки веток необязательны: без них останутся подписи по главам.
+	// Branch cards are optional: without them the captions come from the chapters.
 	cards, _ := s.c.Branches(ctx, manga.ID)
 
 	book := s.book(manga, CollectBranches(chapters, cards))
@@ -116,7 +117,7 @@ func (s *Source) book(m *Manga, branches []Branch) novel.Book {
 	}
 }
 
-// Chapters реализует novel.Source: главы выбранного перевода в порядке чтения.
+// Chapters implements novel.Source: one translation's chapters in reading order.
 func (s *Source) Chapters(ctx context.Context, bookID, editionID string) ([]novel.ChapterInfo, error) {
 	branchID, err := branchID(editionID)
 	if err != nil {
@@ -134,7 +135,7 @@ func (s *Source) Chapters(ctx context.Context, bookID, editionID string) ([]nove
 	return out, nil
 }
 
-// Chapter реализует novel.Source.
+// Chapter implements novel.Source.
 func (s *Source) Chapter(ctx context.Context, bookID, editionID string, ci novel.ChapterInfo) (*novel.Chapter, error) {
 	id, err := branchID(editionID)
 	if err != nil {
@@ -148,27 +149,27 @@ func (s *Source) Chapter(ctx context.Context, bookID, editionID string, ci novel
 	if err != nil {
 		return nil, err
 	}
-	// Порядок чтения знает только список глав, поэтому переносим его из запроса.
+	// Only the chapter list knows the reading order, so carry it over from the request.
 	info := ch.Info()
 	info.Index = ci.Index
 	return &novel.Chapter{Info: info, Content: ch.Content(), Raw: raw}, nil
 }
 
-// DecodeChapter реализует novel.Source: восстанавливает главу из кэша.
+// DecodeChapter implements novel.Source: it restores a chapter from the cache.
 func (s *Source) DecodeChapter(raw []byte) (*novel.Chapter, error) {
 	var ch Chapter
 	if err := json.Unmarshal(raw, &ch); err != nil {
-		return nil, fmt.Errorf("ranobelib: глава из кэша: %w", err)
+		return nil, fmt.Errorf("ranobelib: chapter from cache: %w", err)
 	}
 	return &novel.Chapter{Info: ch.Info(), Content: ch.Content(), Raw: raw}, nil
 }
 
-// Fetch реализует novel.Source.
+// Fetch implements novel.Source.
 func (s *Source) Fetch(ctx context.Context, rawURL string) ([]byte, string, error) {
 	return s.c.Fetch(ctx, rawURL)
 }
 
-// chapterList отдаёт список глав книги, запрашивая его не чаще одного раза.
+// chapterList returns a book's chapter list, asking the site for it at most once.
 func (s *Source) chapterList(ctx context.Context, bookID string) ([]ChapterInfo, error) {
 	s.mu.Lock()
 	cached, ok := s.chapters[bookID]
@@ -187,15 +188,15 @@ func (s *Source) chapterList(ctx context.Context, bookID string) ([]ChapterInfo,
 	return list, nil
 }
 
-// branchID переводит идентификатор перевода в номер ветки.
-// Пустая строка означает ветку без идентификатора.
+// branchID turns a translation identifier into a branch number.
+// An empty string means the branch without an identifier.
 func branchID(editionID string) (int, error) {
 	if editionID == "" {
 		return 0, nil
 	}
 	id, err := strconv.Atoi(editionID)
 	if err != nil {
-		return 0, fmt.Errorf("ranobelib: неверный идентификатор перевода %q", editionID)
+		return 0, fmt.Errorf("ranobelib: invalid translation identifier %q", editionID)
 	}
 	return id, nil
 }

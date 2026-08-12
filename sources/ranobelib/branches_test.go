@@ -23,8 +23,8 @@ func chapter(index int, branchIDs []int, team, user string) ranobelib.ChapterInf
 	return ci
 }
 
-// Подписи веток берутся из карточек: у ветки бывает несколько команд,
-// а в списке глав указана только та, что залила конкретную главу.
+// Branch captions come from the cards: a branch may have several teams, while
+// the chapter list names only the one that posted a given chapter.
 func TestCollectBranchesUsesCards(t *testing.T) {
 	chapters := []ranobelib.ChapterInfo{
 		chapter(1, []int{9824}, "Silent Step", "Theunt"),
@@ -34,22 +34,22 @@ func TestCollectBranchesUsesCards(t *testing.T) {
 	cards := []ranobelib.BranchCard{
 		{ID: 9824, Name: "Ничоси 2", Teams: []ranobelib.Named{{Name: "Silent Step"}, {Name: "Эрл Грей"}}},
 		{ID: 11722, Name: "Webfandom", Teams: []ranobelib.Named{{Name: "Aniker Team"}, {Name: "Lipov Team"}}},
-		{ID: 26435, Name: "Альтернативный перевод"}, // вкладка на сайте есть, глав нет
+		{ID: 26435, Name: "Alternative translation"}, // a tab on the site, but no chapters
 	}
 
 	got := ranobelib.CollectBranches(chapters, cards)
 	if len(got) != 3 {
-		t.Fatalf("ожидалось 3 ветки, получено %d: %+v", len(got), got)
+		t.Fatalf("expected 3 branches, got %d: %+v", len(got), got)
 	}
-	// Самая полная — первой.
+	// The fullest one comes first.
 	if got[0].ID != 9824 || got[0].Count != 2 {
-		t.Errorf("ветки отсортированы неверно: %+v", got[0])
+		t.Errorf("branches sorted wrong: %+v", got[0])
 	}
 	if label := got[0].Label(); label != "Silent Step & Эрл Грей" {
-		t.Errorf("подпись ветки должна браться из карточки, получено %q", label)
+		t.Errorf("the branch caption must come from the card, got %q", label)
 	}
 	if len(got[0].Uploaders) != 2 {
-		t.Errorf("не собраны заливавшие: %+v", got[0].Uploaders)
+		t.Errorf("uploaders were not collected: %+v", got[0].Uploaders)
 	}
 
 	var empty ranobelib.Branch
@@ -58,22 +58,22 @@ func TestCollectBranchesUsesCards(t *testing.T) {
 			empty = b
 		}
 	}
-	if empty.Count != 0 || empty.Label() != "Альтернативный перевод" {
-		t.Errorf("пустая ветка должна остаться в списке с нулём глав: %+v", empty)
+	if empty.Count != 0 || empty.Label() != "Alternative translation" {
+		t.Errorf("an empty branch must stay in the list with zero chapters: %+v", empty)
 	}
 }
 
-// Ветка без идентификатора (сайт присылает null) должна быть доступна как 0.
+// A branch without an identifier (the site sends null) must be reachable as 0.
 func TestCollectBranchesNullID(t *testing.T) {
 	got := ranobelib.CollectBranches([]ranobelib.ChapterInfo{
 		chapter(1, []int{0}, "sAnTeLa", "sAnTeLa"),
 	}, nil)
 
 	if len(got) != 1 || got[0].ID != 0 || got[0].Count != 1 {
-		t.Fatalf("ветка без id разобрана неверно: %+v", got)
+		t.Fatalf("a branch without an id parsed wrong: %+v", got)
 	}
 	if got[0].Label() != "sAnTeLa" {
-		t.Errorf("подпись должна взяться из команды главы, получено %q", got[0].Label())
+		t.Errorf("the caption must come from the chapter team, got %q", got[0].Label())
 	}
 }
 
@@ -86,10 +86,10 @@ func TestChaptersOfBranch(t *testing.T) {
 
 	got := ranobelib.ChaptersOfBranch(chapters, 1)
 	if len(got) != 2 {
-		t.Fatalf("ожидалось 2 главы ветки, получено %d", len(got))
+		t.Fatalf("expected 2 chapters in the branch, got %d", len(got))
 	}
 	if got[0].Index != 1 || got[1].Index != 3 {
-		t.Errorf("главы не отсортированы по порядку чтения: %+v", got)
+		t.Errorf("chapters are not in reading order: %+v", got)
 	}
 }
 
@@ -102,13 +102,13 @@ func TestParseSlug(t *testing.T) {
 		{"https://ranobelib.me/ru/book/14841--beginning-after-the-end-novel", "14841--beginning-after-the-end-novel", true},
 		{"https://ranobelib.me/ru/book/14841--beginning-after-the-end-novel?section=chapters", "14841--beginning-after-the-end-novel", true},
 		{"14841--beginning-after-the-end-novel", "14841--beginning-after-the-end-novel", true},
-		{"Начало после конца", "", false},
+		{"a plain title with spaces", "", false},
 		{"beginning-after-the-end", "", false},
 	}
 	for _, c := range cases {
 		got, ok := ranobelib.ParseSlug(c.in)
 		if got != c.want || ok != c.ok {
-			t.Errorf("ParseSlug(%q) = (%q, %v), ожидалось (%q, %v)", c.in, got, ok, c.want, c.ok)
+			t.Errorf("ParseSlug(%q) = (%q, %v), want (%q, %v)", c.in, got, ok, c.want, c.ok)
 		}
 	}
 }
@@ -121,11 +121,11 @@ func TestBranchTranslators(t *testing.T) {
 	got := b.Translators()
 	want := []string{"Silent Step", "Эрл Грей", "Theunt"}
 	if len(got) != len(want) {
-		t.Fatalf("получено %v, ожидалось %v", got, want)
+		t.Fatalf("got %v, want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("получено %v, ожидалось %v", got, want)
+			t.Fatalf("got %v, want %v", got, want)
 		}
 	}
 }

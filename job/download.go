@@ -9,48 +9,48 @@ import (
 	"github.com/fess932/novelkit/novel"
 )
 
-// DownloadOptions настраивают ход загрузки.
+// DownloadOptions tune how a download proceeds.
 type DownloadOptions struct {
-	// OnChapter вызывается после каждой успешно скачанной главы.
+	// OnChapter is called after every chapter that lands successfully.
 	OnChapter func(Event)
-	// OnWarning вызывается на некритичных бедах — например, не скачалась картинка.
-	// Такие беды не останавливают загрузку, но записываются в состояние задания.
+	// OnWarning is called for non-fatal trouble, such as a picture that would not
+	// download. It does not stop the run, but it is recorded in the job state.
 	OnWarning func(string)
 }
 
-// Event — состояние загрузки после очередной главы.
+// Event is the state of the download after one more chapter.
 type Event struct {
 	Chapter  ChapterState
 	Progress Progress
-	// Elapsed — сколько времени идёт текущий запуск.
+	// Elapsed is how long the current run has been going.
 	Elapsed time.Duration
-	// ETA — оценка оставшегося времени по средней скорости текущего запуска.
+	// ETA estimates the time left from the average pace of the current run.
 	ETA time.Duration
 }
 
-// ChapterError сообщает, на какой главе всё остановилось.
+// ChapterError says which chapter brought the run to a halt.
 type ChapterError struct {
 	Chapter ChapterState
 	Err     error
 }
 
 func (e *ChapterError) Error() string {
-	return fmt.Sprintf("job: глава %s (том %s): %v", e.Chapter.Number, e.Chapter.Volume, e.Err)
+	return fmt.Sprintf("job: chapter %s (volume %s): %v", e.Chapter.Number, e.Chapter.Volume, e.Err)
 }
 
 func (e *ChapterError) Unwrap() error { return e.Err }
 
-// Download докачивает недостающие главы.
+// Download fetches the chapters that are still missing.
 //
-// Останавливается на первой неустранимой ошибке и возвращает *ChapterError:
-// всё, что успело скачаться, уже лежит в кэше, повторный вызов продолжит с того же места.
-// Отмена контекста тоже останавливает загрузку без потери скачанного.
+// It stops at the first unrecoverable error and returns a *ChapterError:
+// everything already fetched is in the cache, and calling it again resumes from
+// the same place. Cancelling the context stops it just as safely.
 func (j *Job) Download(ctx context.Context, src novel.Source, opts DownloadOptions) error {
 	started := time.Now()
 	var fetched int
 
-	// Снимок плана: дальше состояние меняется только под мьютексом,
-	// поэтому параллельный вызов State() не увидит его на полпути.
+	// Snapshot the plan: from here on the state changes only under the mutex,
+	// so a concurrent State() never sees it half-updated.
 	j.mu.Lock()
 	chapters := append([]ChapterState(nil), j.state.Chapters...)
 	ref := j.state.Source
@@ -58,7 +58,7 @@ func (j *Job) Download(ctx context.Context, src novel.Source, opts DownloadOptio
 	j.mu.Unlock()
 
 	if ref.ID != src.ID() {
-		return fmt.Errorf("job: задание сделано источником %q, а передан %q", ref.ID, src.ID())
+		return fmt.Errorf("job: the job belongs to source %q, but %q was passed", ref.ID, src.ID())
 	}
 
 	for i, ch := range chapters {
@@ -112,8 +112,9 @@ func (j *Job) Download(ctx context.Context, src novel.Source, opts DownloadOptio
 	return nil
 }
 
-// fetchImages находит картинки главы, разобрав её разметку, и качает недостающие.
-// Битая картинка не роняет загрузку текста: она пропускается с предупреждением.
+// fetchImages discovers a chapter's pictures by rendering its markup and
+// downloads the missing ones. A broken picture does not sink the text: it is
+// skipped with a warning.
 func (j *Job) fetchImages(ctx context.Context, src novel.Source, chapter *novel.Chapter, opts DownloadOptions) error {
 	if chapter.Content == nil {
 		return nil
@@ -122,7 +123,7 @@ func (j *Job) fetchImages(ctx context.Context, src novel.Source, chapter *novel.
 	var found []novel.Image
 	chapter.Content.XHTML(novel.ResolverFunc(func(img novel.Image) (string, bool) {
 		found = append(found, img)
-		return "", false // на этом шаге разметка не нужна, нужны только адреса
+		return "", false // markup is not wanted here, only the addresses
 	}))
 
 	for _, img := range found {
@@ -151,7 +152,7 @@ func (j *Job) fetchImages(ctx context.Context, src novel.Source, chapter *novel.
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			msg := fmt.Sprintf("картинка не скачалась (%s): %v", chapter.Info.Title(), err)
+			msg := fmt.Sprintf("picture download failed (%s): %v", chapter.Info.Title(), err)
 			j.warn(msg)
 			if opts.OnWarning != nil {
 				opts.OnWarning(msg)
@@ -179,7 +180,7 @@ func (j *Job) hasChapter(index int) bool {
 	return err == nil
 }
 
-// LoadChapter читает главу из кэша задания и разбирает её тем же источником.
+// LoadChapter reads a chapter from the job cache and decodes it with the same source.
 func (j *Job) LoadChapter(src novel.Source, index int) (*novel.Chapter, error) {
 	raw, err := os.ReadFile(j.chapterPath(index))
 	if err != nil {
@@ -187,7 +188,7 @@ func (j *Job) LoadChapter(src novel.Source, index int) (*novel.Chapter, error) {
 	}
 	ch, err := src.DecodeChapter(raw)
 	if err != nil {
-		return nil, fmt.Errorf("job: глава %d: %w", index, err)
+		return nil, fmt.Errorf("job: chapter %d: %w", index, err)
 	}
 	return ch, nil
 }

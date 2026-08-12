@@ -9,14 +9,14 @@ import (
 	"github.com/fess932/novelkit/novel"
 )
 
-// HTML — содержимое главы в виде разметки.
+// HTML is chapter content stored as markup.
 //
-// Неизвестные теги разворачиваются (текст не теряется), скрипты и стили
-// выбрасываются, незакрытые теги закрываются, служебные атрибуты сайта
-// не переносятся.
+// Unknown tags are unwrapped (their text survives), scripts and styles are
+// dropped, unclosed tags are closed, and the site's own bookkeeping attributes
+// are left behind.
 type HTML string
 
-// allowedTags — теги, которые имеет смысл нести в книгу, и во что они превращаются.
+// allowedTags maps the tags worth carrying into a book to what they become.
 var allowedTags = map[string]string{
 	"p": "p", "br": "br", "hr": "hr",
 	"b": "strong", "strong": "strong",
@@ -33,16 +33,16 @@ var allowedTags = map[string]string{
 	"figure": "figure", "figcaption": "figcaption",
 }
 
-// voidTags закрываются сами: в XHTML это <br/>, а не <br>.
+// voidTags close themselves: XHTML wants <br/>, not <br>.
 var voidTags = map[string]bool{"br": true, "hr": true, "img": true}
 
-// dropTags выбрасываются вместе с содержимым.
+// dropTags are discarded along with their contents.
 var dropTags = map[string]bool{
 	"script": true, "style": true, "iframe": true, "noscript": true,
 	"svg": true, "form": true, "button": true, "input": true, "head": true,
 }
 
-// blockTags разделяют текст в PlainText.
+// blockTags separate paragraphs in PlainText.
 var blockTags = map[string]bool{
 	"p": true, "div": true, "li": true, "blockquote": true, "figcaption": true,
 	"h1": true, "h2": true, "h3": true, "h4": true, "h5": true, "h6": true, "tr": true,
@@ -57,7 +57,7 @@ func parseFragment(s string) []*html.Node {
 	return nodes
 }
 
-// XHTML реализует novel.Content.
+// XHTML implements novel.Content.
 func (h HTML) XHTML(images novel.ImageResolver) string {
 	r := &htmlRenderer{images: images}
 	var b strings.Builder
@@ -67,7 +67,7 @@ func (h HTML) XHTML(images novel.ImageResolver) string {
 	return strings.TrimSpace(b.String())
 }
 
-// PlainText реализует novel.Content.
+// PlainText implements novel.Content.
 func (h HTML) PlainText() string {
 	var b strings.Builder
 	var walk func(*html.Node)
@@ -113,9 +113,9 @@ func (r *htmlRenderer) node(b *strings.Builder, n *html.Node) {
 		b.WriteString(esc(n.Data))
 		return
 	case html.ElementNode:
-		// продолжаем ниже
+		// handled below
 	default:
-		// Комментарии, doctype и прочее в книгу не нужны.
+		// Comments, doctype and the like have no place in a book.
 		return
 	}
 
@@ -126,7 +126,7 @@ func (r *htmlRenderer) node(b *strings.Builder, n *html.Node) {
 
 	tag, ok := allowedTags[name]
 	if !ok {
-		r.children(b, n) // неизвестная обёртка — разворачиваем
+		r.children(b, n) // unknown wrapper: unwrap it
 		return
 	}
 
@@ -137,7 +137,7 @@ func (r *htmlRenderer) node(b *strings.Builder, n *html.Node) {
 	case "a":
 		href := attr(n, "href")
 		if href == "" || !safeHref(href) {
-			r.children(b, n) // ссылка без адреса: текст оставляем, обёртку убираем
+			r.children(b, n) // link with no address: keep the text, drop the anchor
 			return
 		}
 		b.WriteString(`<a href="` + esc(href) + `">`)
@@ -180,7 +180,7 @@ func attr(n *html.Node, name string) string {
 	return ""
 }
 
-// ExtOf достаёт расширение файла из адреса.
+// ExtOf extracts a file extension from an address.
 func ExtOf(u string) string {
 	if i := strings.IndexAny(u, "?#"); i >= 0 {
 		u = u[:i]

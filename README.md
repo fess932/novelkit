@@ -1,126 +1,131 @@
 # novelkit
 
-Скачивание книг с сайтов-читалок и сборка EPUB: библиотека на Go и утилита поверх неё.
+Download books from reader sites and assemble them into EPUB: a Go library and a
+command-line tool built on top of it.
 
-Ядро не знает ни про один сайт. Новый сайт подключается реализацией одного интерфейса,
-всё остальное — кэш, докачка после обрыва, сборка книги, сжатие картинок — уже написано
-и работает с любым источником одинаково. Пока поддержан ranobelib.me.
+The core knows nothing about any particular site. A new site is plugged in by
+implementing one interface; everything else — caching, resumable downloads, book
+assembly, image compression — is already written and behaves the same for every
+source. So far ranobelib.me is supported.
 
 ```sh
-go install github.com/fess932/novelkit/cmd/novelkit@latest   # утилита
-go get github.com/fess932/novelkit                           # библиотека
+go install github.com/fess932/novelkit/cmd/novelkit@latest   # the tool
+go get github.com/fess932/novelkit                           # the library
 ```
 
-## Зависимости
+## Dependencies
 
-| Что | Зачем | Обязательно |
+| What | Why | Required |
 | --- | --- | --- |
-| Go 1.24+ | сборка | да |
-| `golang.org/x/net` | разбор HTML-разметки глав | да |
-| `golang.org/x/image` | масштабирование иллюстраций | да |
-| `github.com/gen2brain/jpegli` | кодирование JPEG (libjxl в WASM) | да |
+| Go 1.24+ | building | yes |
+| `golang.org/x/net` | parsing chapter HTML | yes |
+| `golang.org/x/image` | scaling illustrations | yes |
+| `github.com/gen2brain/jpegli` | JPEG encoding (libjxl in WASM) | yes |
 
-Внешних программ не нужно вообще: ни ImageMagick, ни ffmpeg, ни cgo.
-Сжатие целиком внутри процесса — стандартные кодеки плюс ресемплер из `x/image/draw`.
+No external programs at all: no ImageMagick, no ffmpeg, no cgo. Compression
+happens entirely in-process.
 
-# Утилита
+# The tool
 
-Проще всего запустить без аргументов — она спросит всё сама:
+The easiest way is to run it with no arguments and let it ask:
 
 ```
-Что делаем?
- ❯  1. Скачать новую книгу     — по ссылке или названию
-    2. Продолжить загрузку     — незавершённых: 1
-    3. Собрать EPUB из кэша    — книг в кэше: 2
-    4. Показать, что в кэше
+What are we doing?
+ ❯  1. Download a new book             — by link or title
+    2. Continue a download             — unfinished: 1
+    3. Assemble an EPUB from the cache — books cached: 2
+    4. Show what is cached
 ```
 
-Выбор стрелками (или `j`/`k`, или номером пункта), Enter — подтвердить, `q` — выход.
-Дальше идут выбор книги, перевода, диапазона глав и вопрос про сжатие иллюстраций.
+Move with the arrow keys (or `j`/`k`, or by typing an entry number), Enter
+confirms, `q` quits. Then come the book, the translation, the chapter range and
+a question about shrinking illustrations.
 
-Всё то же самое доступно флагами:
+The same things are available as flags:
 
 ```sh
-# по ссылке или slug — дальше интерактивный выбор перевода и диапазона
+# by link or slug — the translation and range are chosen interactively
 novelkit https://ranobelib.me/ru/book/14841--beginning-after-the-end-novel
 
-# по названию (поиск, потом выбор из списка)
-novelkit "Начало после конца"
+# by title (search, then pick from a list)
+novelkit "Beginning After The End"
 
-# посмотреть, чьи переводы есть
+# see which translations exist
 novelkit 14841--beginning-after-the-end-novel --list-editions
 
-# без вопросов: конкретный перевод, диапазон, сжатие
+# no questions: a specific translation, range and compression
 novelkit 14841--beginning-after-the-end-novel --edition 9824 --from 1 --to 100 --compress --yes
 ```
 
-### Переводы
+### Translations
 
-У одной книги на сайте обычно несколько переводов — это вкладки над списком глав.
-`--list-editions` показывает их ровно так же, как сайт:
+A book usually has several translations — the tabs above the chapter list.
+`--list-editions` prints them the way the site shows them:
 
 ```
-Начало после конца — переводов: 4
-  id=9824  550 гл.  Silent Step & Эрл Грей («Ничоси 2») [Theunt, AtLas, YuraFissura]
-  id=9823  301 гл.  Kyu Team & Rulate Project & FiuTeam («Ничоси 1») [Кьюджин, …]
-  id=11722  17 гл.  Aniker Team & Lipov Team («Webfandom») [Andrey Lipov]
-  id=26435  нет глав  Альтернативный перевод
+Beginning After The End — translations: 4
+  id=9824  550 chapters  Silent Step & Эрл Грей («Ничоси 2») [Theunt, AtLas, …]
+  id=9823  301 chapters  Kyu Team & Rulate Project & FiuTeam («Ничоси 1») […]
+  id=11722  17 chapters  Aniker Team & Lipov Team («Webfandom») [Andrey Lipov]
+  id=26435  no chapters  Альтернативный перевод
 ```
 
-В скобках — внутреннее имя, в квадратных — кто заливал главы. Перевод без единой главы
-показывается, но выбрать его нельзя. Выбрать можно по id (`--edition 9824`) или по названию
-команды (`--edition-name "Эрл Грей"`).
+In parentheses is the site's internal name, in brackets the people who posted the
+chapters. A translation with no chapters is listed but cannot be chosen. Pick one
+by id (`--edition 9824`) or by team name (`--edition-name "Эрл Грей"`).
 
-### Остановка и продолжение
+### Stopping and resuming
 
-Загрузка останавливается на первой неустранимой ошибке, скачанное остаётся в кэше:
+A download stops at the first unrecoverable error, keeping what it already has:
 
 ```sh
-novelkit --resume                  # последнее задание
+novelkit --resume                  # the most recent job
 novelkit --resume .novelkit/ranobelib-14841--...--9824
-novelkit --list-jobs               # что недокачано
+novelkit --list-jobs               # what is unfinished
 ```
 
-Кэш хранит сырые ответы сайта, поэтому пересборка книги не тратит ни одного запроса
-(`--build-only`), а расширение диапазона докачивает только новые главы.
+The cache holds the site's raw responses, so rebuilding a book costs no requests
+at all (`--build-only`), and widening the range only fetches the new chapters.
 
-### Диапазон глав
+### Chapter range
 
-`--from 250` — с 250-й до конца, `--to 100` — первые сто, оба вместе — отрезок.
-В интерактиве то же самое: `250`, `1-100` или Enter для всех глав.
-Это порядковые номера внутри выбранного перевода, а не номера глав с сайта.
+`--from 250` runs from the 250th to the end, `--to 100` takes the first hundred,
+both together take a slice. The interactive prompt accepts the same: `250`,
+`1-100`, or Enter for everything. These are positions within the chosen
+translation, not the chapter numbers printed on the site.
 
-### Опции
+### Options
 
-| Опция | Значение |
+| Option | Meaning |
 | --- | --- |
-| `--edition <id>` / `--edition-name <строка>` | какой перевод качать |
-| `--list-editions` | показать переводы и выйти |
-| `--from <n>` / `--to <n>` | диапазон глав |
-| `--out <файл>` | путь к .epub |
-| `--work-dir <кат>` | каталог кэша (по умолчанию `.novelkit`) |
-| `--delay` / `--jitter` / `--retries` | темп запросов и число повторов |
-| `--no-images` | не скачивать иллюстрации |
-| `--compress` + `--max-image` / `--quality` | сжатие иллюстраций (1200 / 82) |
-| `--build-only` | собрать EPUB из кэша, ничего не качая |
-| `--refresh-meta` | обновить описание, автора и жанры |
-| `--resume [кат]` / `--list-jobs` | продолжение и список заданий |
-| `--yes` | без вопросов |
+| `--edition <id>` / `--edition-name <s>` | which translation to download |
+| `--list-editions` | print the translations and exit |
+| `--from <n>` / `--to <n>` | chapter range |
+| `--out <file>` | path to the .epub |
+| `--work-dir <dir>` | cache directory (default `.novelkit`) |
+| `--delay` / `--jitter` / `--retries` | request pacing and retry count |
+| `--no-images` | skip illustrations |
+| `--compress` + `--max-image` / `--quality` | shrink illustrations (1200 / 82) |
+| `--build-only` | assemble from the cache, download nothing |
+| `--refresh-meta` | refresh the blurb, author and genres |
+| `--resume [dir]` / `--list-jobs` | resuming and the job list |
+| `--yes` | no questions |
 
-# Библиотека
+# The library
 
-| Пакет | Отвечает за | Знает про сайты |
+| Package | Responsible for | Site-aware |
 | --- | --- | --- |
-| `novel` | общие типы и интерфейс `Source` | нет |
-| `markup` | разметка → XHTML: HTML и ProseMirror | нет |
-| `epub` | сборка EPUB 3 | нет |
-| `job` | кэш заданий, докачка, сборка из кэша | нет |
-| `imagex` | уменьшение и пережатие картинок | нет |
-| `sources/ranobelib` | ranobelib.me | да |
-| `cmd/novelkit` | утилита | — |
+| `novel` | shared types and the `Source` interface | no |
+| `markup` | markup to XHTML: HTML and ProseMirror | no |
+| `epub` | EPUB 3 assembly | no |
+| `job` | job cache, resuming, assembling from cache | no |
+| `imagex` | scaling and re-compressing pictures | no |
+| `sources/ranobelib` | ranobelib.me | yes |
+| `cmd/novelkit` | the tool | — |
 
-Слои независимы: можно взять только сборщик EPUB, только разбор разметки или всё вместе.
-Библиотека про утилиту не знает — весь интерактив и вывод живут в `cmd/novelkit`.
+The layers are independent: take only the EPUB writer, only the markup parser, or
+all of it. The library knows nothing about the tool — every prompt and every line
+of output lives in `cmd/novelkit`.
 
 ```go
 ctx := context.Background()
@@ -132,7 +137,7 @@ src, bookID, err := registry.Resolve("https://ranobelib.me/ru/book/14841--beginn
 
 book, err := src.Book(ctx, bookID)
 for _, e := range book.Editions {
-    fmt.Printf("%s: %s — %d гл.\n", e.ID, e.Label(), e.Chapters)
+    fmt.Printf("%s: %s — %d chapters\n", e.ID, e.Label(), e.Chapters)
 }
 
 store, err := job.OpenStore(".novelkit")
@@ -140,112 +145,129 @@ j, err := store.Plan(ctx, src, job.Request{
     BookID: bookID, EditionID: "9824", From: 1, To: 100, WithImages: true,
 })
 
-// Останавливается на первой ошибке; повторный вызов продолжает с того же места
+// Stops at the first error; calling it again resumes from the same place
 err = j.Download(ctx, src, job.DownloadOptions{
     OnChapter: func(e job.Event) {
-        fmt.Printf("%d/%d %s (осталось ~%v)\n", e.Progress.Done, e.Progress.Total, e.Chapter.Title(), e.ETA)
+        fmt.Printf("%d/%d %s (about %v left)\n", e.Progress.Done, e.Progress.Total, e.Chapter.Title(), e.ETA)
     },
 })
 var chErr *job.ChapterError
 if errors.As(err, &chErr) {
-    fmt.Printf("остановились на главе %s: %v\n", chErr.Chapter.Number, chErr.Err)
+    fmt.Printf("stopped at chapter %s: %v\n", chErr.Chapter.Number, chErr.Err)
 }
 
-// Сборка в сеть не ходит
+// Assembly never touches the network
 opt, _ := imagex.NewResizer(filepath.Join(j.Dir(), "min"), 1200, 82)
-res, err := j.BuildFile(ctx, src, "книга.epub", job.BuildOptions{Optimizer: opt})
+res, err := j.BuildFile(ctx, src, "book.epub", job.BuildOptions{Optimizer: opt})
 ```
 
-## Как подключить новый сайт
+## Adding a site
 
-Реализовать `novel.Source` — девять методов:
+Implement `novel.Source` — nine methods:
 
 ```go
 type Source interface {
     ID() string                                                    // "ranobelib"
     Supports(rawURL string) bool
     ParseRef(rawURL string) (bookID string, ok bool)
-    Search(ctx, query string) ([]Book, error)                      // можно вернуть ErrUnsupported
-    Book(ctx, bookID string) (*Book, error)                        // карточка + список переводов
+    Search(ctx, query string) ([]Book, error)                      // may return ErrUnsupported
+    Book(ctx, bookID string) (*Book, error)                        // details plus translations
     Chapters(ctx, bookID, editionID string) ([]ChapterInfo, error)
     Chapter(ctx, bookID, editionID string, ci ChapterInfo) (*Chapter, error)
-    DecodeChapter(raw []byte) (*Chapter, error)                    // глава из кэша
-    Fetch(ctx, rawURL string) ([]byte, string, error)              // картинки и обложка
+    DecodeChapter(raw []byte) (*Chapter, error)                    // a chapter from the cache
+    Fetch(ctx, rawURL string) ([]byte, string, error)              // pictures and covers
 }
 ```
 
-Разбор разметки писать не нужно: в `markup` уже есть `markup.HTML` для сайтов, отдающих
-главу разметкой, и `markup.ProseMirror` для документов редактора. Оба реализуют
-`novel.Content`, а `markup.Auto` выбирает подходящий сам, если сайт отдаёт то одно, то другое.
+You will not have to write a markup parser: `markup.HTML` covers sites that serve
+chapters as markup and `markup.ProseMirror` covers editor documents. Both
+implement `novel.Content`, and `markup.Auto` picks between them when a site sends
+one shape sometimes and the other the rest of the time.
 
-`Chapter.Raw` — сырой ответ сайта; кэш хранит именно его, а обратно превращает `DecodeChapter`.
-Поэтому починка разбора не требует перекачивать уже скачанное.
+`Chapter.Raw` is the site's own response; the cache stores exactly that and
+`DecodeChapter` turns it back into a chapter, so fixing a parser never means
+downloading anything again.
 
-Темп запросов источник держит сам: ядро за него этого не делает, а сайты за частые
-обращения закрывают доступ. В `sources/ranobelib` для этого есть готовый клиент с
-последовательной очередью, паузой со случайным разбросом и отработкой 429.
+A source paces its own requests: the core does not do it, and sites cut off
+clients that hammer them. `sources/ranobelib` ships a client that does this —
+a serial queue, a pause with jitter, and proper handling of 429.
 
-## Загрузка и докачка
+## Downloading and resuming
 
-Задание — это каталог: `job.json`, сырые ответы по главам в `chapters/`, картинки в `assets/`.
-Глава помечается выполненной сразу после записи на диск, поэтому обрыв не теряет предыдущие.
+A job is a directory: `job.json`, raw chapter responses under `chapters/` and
+pictures under `assets/`. A chapter is marked done right after it is written, so
+an interruption never costs the chapters before it.
 
-- `Download` возвращает `*job.ChapterError` — видно, на какой главе всё встало и почему;
-- повторный вызов докачивает только недостающее;
-- расширение диапазона в `Plan` не трогает уже скачанное;
-- `Build` собирает книгу из кэша и в сеть не ходит; недокачанные главы пропускаются
-  и считаются в `BuildResult.Missing`;
-- задание помнит свой источник и не даст скачивать себя чужим.
+- `Download` returns a `*job.ChapterError` — it says which chapter stopped it and why;
+- calling it again fetches only what is missing;
+- widening the range in `Plan` leaves downloaded chapters alone;
+- `Build` assembles from the cache without touching the network; chapters that are
+  not cached are skipped and counted in `BuildResult.Missing`;
+- a job remembers its source and refuses to be driven by another one.
 
-## Сжатие иллюстраций
+## Compressing illustrations
 
 ```go
-opt, err := imagex.NewResizer(dir, 1200, 82) // предел по большей стороне, качество jpeg
+opt, err := imagex.NewResizer(dir, 1200, 82) // cap on the longer side, jpeg quality
 ```
 
-Оригиналы не трогаются: результат пишется в отдельный каталог, поэтому книгу всегда можно
-пересобрать с другими настройками или вовсе без сжатия (`imagex.Passthrough{}`).
+Originals are never touched: results go to a separate directory, so a book can
+always be rebuilt with different settings or with no compression at all
+(`imagex.Passthrough{}`).
 
-JPEG кодируется через jpegli — тот самый кодировщик из libjxl, собранный в WASM
-(чистый Go, без cgo). Замер на реальных иллюстрациях, качество 82, сторона 1200:
+JPEG is encoded with jpegli — the libjxl encoder compiled to WASM (pure Go, no
+cgo). Measured on real illustrations at quality 82 and a 1200 px cap:
 
-| кодировщик | вес | DSSIM ↓ | PSNR ↑ |
+| encoder | size | DSSIM ↓ | PSNR ↑ |
 | --- | --- | --- | --- |
-| `image/jpeg` из stdlib | 45% от оригинала | 0.0198 | 36.8 дБ |
-| jpegli | **39%** | **0.0171** | **37.1 дБ** |
+| `image/jpeg` from the standard library | 45% of the original | 0.0198 | 36.8 dB |
+| jpegli | **39%** | **0.0171** | **37.1 dB** |
 
-То есть файл на 14% легче и при этом ближе к оригиналу, а не наоборот.
-Кодировщик один: если он откажет, `Optimize` вернёт ошибку, а картинка попадёт
-в книгу в исходном виде — молчаливой подмены кодировщика не происходит.
+That is 14% smaller *and* closer to the original, rather than a trade. There is
+only one encoder: if it fails, `Optimize` returns an error and the picture goes
+into the book untouched — no silent substitution.
 
-Картинка с прозрачностью остаётся PNG (в JPEG у неё почернел бы фон), анимация не трогается,
-а если пережатая версия вышла тяжелее исходной — берётся исходная.
+A picture with transparency stays PNG (as JPEG its background would turn black),
+animations are left alone, and when the compressed version comes out heavier than
+the original, the original wins.
 
-## Сборка EPUB отдельно
+## Assembling an EPUB on its own
 
-`epub.Book` не знает ни про сайты, ни про кэш: ему можно скормить любые главы.
+`epub.Book` knows nothing about sites or caches; feed it any chapters you like.
 
 ```go
 book := &epub.Book{
-    Metadata: epub.Metadata{Title: "Книга", Authors: []string{"Автор"}},
-    Chapters: []epub.Chapter{{Volume: "1", Number: "1", Title: "Глава 1", Body: "<p>Текст</p>"}},
+    Metadata: epub.Metadata{Title: "Book", Authors: []string{"Author"}},
+    Chapters: []epub.Chapter{{Volume: "1", Number: "1", Title: "Chapter 1", Body: "<p>Text</p>"}},
 }
-err := book.WriteFile("книга.epub")   // или book.WriteTo(w), book.Bytes()
+err := book.WriteFile("book.epub")   // or book.WriteTo(w), book.Bytes()
 ```
 
-`mimetype` пишется первой записью без сжатия и без дескриптора данных, оглавление —
-в двух форматах (`nav.xhtml` и `toc.ncx`), тома группируются, если их больше одного.
-Внутри — титульная страница с аннотацией, обложка, глава = отдельный файл,
-типографская вёрстка: абзацный отступ, выключка по ширине, переносы.
+`mimetype` is written as the first entry, stored and without a data descriptor;
+the table of contents is produced in both formats (`nav.xhtml` and `toc.ncx`) and
+grouped by volume when there is more than one. Inside are a title page with the
+blurb, the cover, one file per chapter, and print-like typography: paragraph
+indents, justified text, hyphenation.
 
-## Тесты
+The words the builder writes into the book — "Table of contents", "Volume",
+"Annotation" and so on — come from `epub.Labels`. Override them to produce a book
+in another language:
+
+```go
+book.Labels = epub.Labels{TableOfContents: "Оглавление", Volume: "Том", Annotation: "Аннотация"}
+```
+
+Chapter headings work the same way: `novel.ChapterInfo.TitleWith("Глава")` builds
+them with your own word.
+
+## Tests
 
 ```sh
-go test ./...     # без сети: разметка, EPUB, полный цикл на поддельном источнике
+go test ./...     # no network: markup, EPUB, a full cycle against a fake source
 go test -race ./...
 
-RANOBELIB_LIVE=1 go test -run TestLive -v ./sources/ranobelib/   # живой прогон: две главы
+RANOBELIB_LIVE=1 go test -run TestLive -v ./sources/ranobelib/   # live run: two chapters
 ```
 
-Тесты пакета `job` написаны на поддельном источнике, в котором нет ни строчки про ranobelib —
-заодно это проверка того, что интерфейса хватает для нового сайта.
+The `job` tests run against a fake source that never mentions ranobelib, which
+doubles as proof that the interface is enough for a new site.

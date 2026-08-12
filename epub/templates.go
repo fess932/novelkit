@@ -6,8 +6,67 @@ import (
 	"time"
 )
 
-// DefaultCSS — типографика по умолчанию: абзацный отступ, выключка по ширине,
-// переносы, аккуратные цитаты и примечания переводчика.
+// Labels are the words the builder writes into the book itself. The zero value
+// falls back to DefaultLabels, so a book in another language can be produced
+// without touching the rest of the package.
+type Labels struct {
+	TableOfContents string
+	Annotation      string
+	Author          string
+	Translation     string
+	Year            string
+	Genres          string
+	Source          string
+	Cover           string
+	// Volume prefixes a volume number, e.g. "Volume 3".
+	Volume string
+	// Start names the landmark pointing at the first chapter.
+	Start         string
+	UnknownAuthor string
+}
+
+// DefaultLabels are the English defaults.
+var DefaultLabels = Labels{
+	TableOfContents: "Table of contents",
+	Annotation:      "Annotation",
+	Author:          "Author",
+	Translation:     "Translation",
+	Year:            "Year",
+	Genres:          "Genres",
+	Source:          "Source",
+	Cover:           "Cover",
+	Volume:          "Volume",
+	Start:           "Start",
+	UnknownAuthor:   "Unknown author",
+}
+
+func (l Labels) withDefaults() Labels {
+	d := DefaultLabels
+	for _, f := range []struct {
+		dst *string
+		def string
+	}{
+		{&l.TableOfContents, d.TableOfContents},
+		{&l.Annotation, d.Annotation},
+		{&l.Author, d.Author},
+		{&l.Translation, d.Translation},
+		{&l.Year, d.Year},
+		{&l.Genres, d.Genres},
+		{&l.Source, d.Source},
+		{&l.Cover, d.Cover},
+		{&l.Volume, d.Volume},
+		{&l.Start, d.Start},
+		{&l.UnknownAuthor, d.UnknownAuthor},
+	} {
+		if *f.dst == "" {
+			*f.dst = f.def
+		}
+	}
+	return l
+}
+
+// DefaultCSS is the built-in typography: paragraph indent, justified text,
+// hyphenation, tidy block quotes and translator's notes.
 const DefaultCSS = `@charset "utf-8";
 
 body { margin: 0 5%; line-height: 1.5; text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
@@ -53,11 +112,11 @@ const containerXML = `<?xml version="1.0" encoding="utf-8"?>
 </container>
 `
 
-// page заворачивает фрагмент в самостоятельный XHTML-документ.
-func page(title, body string) string {
+// page wraps a fragment into a standalone XHTML document.
+func page(title, lang, body string) string {
 	return `<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="ru" lang="ru">
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="` + esc(lang) + `" lang="` + esc(lang) + `">
 <head>
   <meta charset="utf-8"/>
   <title>` + esc(title) + `</title>
@@ -70,26 +129,26 @@ func page(title, body string) string {
 `
 }
 
-func titlePage(m Metadata) string {
+func titlePage(m Metadata, l Labels) string {
 	var b strings.Builder
 	b.WriteString(`<div class="title-page">` + "\n  <h1>" + esc(m.Title) + "</h1>\n")
 	if m.OriginalTitle != "" && m.OriginalTitle != m.Title {
 		b.WriteString(`  <p class="orig">` + esc(m.OriginalTitle) + "</p>\n")
 	}
-	row := func(label string, value string) {
+	row := func(label, value string) {
 		if value != "" {
 			b.WriteString(`  <p class="meta">` + esc(label) + ": " + esc(value) + "</p>\n")
 		}
 	}
-	row("Автор", strings.Join(m.Authors, ", "))
-	row("Перевод", strings.Join(m.Translators, ", "))
-	row("Год", m.Date)
-	row("Жанры", strings.Join(m.Genres, ", "))
-	row("Источник", m.Source)
+	row(l.Author, strings.Join(m.Authors, ", "))
+	row(l.Translation, strings.Join(m.Translators, ", "))
+	row(l.Year, m.Date)
+	row(l.Genres, strings.Join(m.Genres, ", "))
+	row(l.Source, m.Source)
 	b.WriteString("</div>\n")
 
 	if d := strings.TrimSpace(m.Description); d != "" {
-		b.WriteString(`<div class="annotation"><h2>Аннотация</h2>` + "\n")
+		b.WriteString(`<div class="annotation"><h2>` + esc(l.Annotation) + "</h2>\n")
 		for _, p := range strings.Split(d, "\n\n") {
 			if p = strings.TrimSpace(p); p != "" {
 				b.WriteString("<p>" + esc(p) + "</p>\n")
@@ -97,28 +156,28 @@ func titlePage(m Metadata) string {
 		}
 		b.WriteString("</div>\n")
 	}
-	return page(m.Title, b.String())
+	return page(m.Title, m.Language, b.String())
 }
 
-func navDoc(title, first, list string) string {
+func navDoc(title, lang, first, list string, l Labels) string {
 	return `<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="ru" lang="ru">
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="` + esc(lang) + `" lang="` + esc(lang) + `">
 <head>
   <meta charset="utf-8"/>
-  <title>Оглавление</title>
+  <title>` + esc(l.TableOfContents) + `</title>
   <link rel="stylesheet" type="text/css" href="styles/main.css"/>
 </head>
 <body>
   <nav epub:type="toc" id="toc">
-    <h1>Оглавление</h1>
+    <h1>` + esc(l.TableOfContents) + `</h1>
     <ol>
       <li><a href="text/title.xhtml">` + esc(title) + `</a></li>
 ` + list + `    </ol>
   </nav>
   <nav epub:type="landmarks" hidden="hidden">
     <ol>
-      <li><a epub:type="bodymatter" href="` + first + `">Начало</a></li>
+      <li><a epub:type="bodymatter" href="` + first + `">` + esc(l.Start) + `</a></li>
     </ol>
   </nav>
 </body>
@@ -146,7 +205,7 @@ func ncxDoc(id, title, points string) string {
 `
 }
 
-func opfDoc(id string, m Metadata, modified time.Time, hasCover bool, manifest, spine []string) string {
+func opfDoc(id string, m Metadata, l Labels, modified time.Time, hasCover bool, manifest, spine []string) string {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" xml:lang="` + esc(m.Language) + `">
@@ -156,7 +215,7 @@ func opfDoc(id string, m Metadata, modified time.Time, hasCover bool, manifest, 
     <dc:language>` + esc(m.Language) + `</dc:language>
 `)
 	if len(m.Authors) == 0 {
-		m.Authors = []string{"Неизвестный автор"}
+		m.Authors = []string{l.UnknownAuthor}
 	}
 	for i, a := range m.Authors {
 		fmt.Fprintf(&b, "    <dc:creator id=\"creator-%d\">%s</dc:creator>\n", i, esc(a))

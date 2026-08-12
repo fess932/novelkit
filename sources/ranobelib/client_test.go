@@ -29,13 +29,13 @@ func testClient(t *testing.T, h http.Handler, opts ...ranobelib.Option) *ranobel
 func TestChapterDecoding(t *testing.T) {
 	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Site-Id"); got != "3" {
-			t.Errorf("не передан Site-Id: %q", got)
+			t.Errorf("Site-Id was not sent: %q", got)
 		}
 		if got := r.URL.Query().Get("branch_id"); got != "42" {
-			t.Errorf("не передан branch_id: %q", got)
+			t.Errorf("branch_id was not sent: %q", got)
 		}
-		w.Write([]byte(`{"data":{"id":7,"volume":"1","number":"2","name":"Пролог",
-			"content":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"текст"}]}]},
+		w.Write([]byte(`{"data":{"id":7,"volume":"1","number":"2","name":"Prologue",
+			"content":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"text"}]}]},
 			"attachments":[{"name":"pic","extension":"jpg","url":"/uploads/pic.jpg"}]}}`))
 	}))
 
@@ -43,22 +43,22 @@ func TestChapterDecoding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ch.Title() != "Глава 2. Пролог" {
-		t.Errorf("заголовок главы: %q", ch.Title())
+	if ch.Title() != "Chapter 2. Prologue" {
+		t.Errorf("chapter heading: %q", ch.Title())
 	}
 	if len(ch.Attachments) != 1 || ch.Attachments[0].URL != "/uploads/pic.jpg" {
-		t.Errorf("вложения разобраны неверно: %+v", ch.Attachments)
+		t.Errorf("attachments parsed wrong: %+v", ch.Attachments)
 	}
-	if body := ch.Content().XHTML(nil); !strings.Contains(body, "текст") {
-		t.Errorf("содержимое главы потеряно: %q", body)
+	if body := ch.Content().XHTML(nil); !strings.Contains(body, "text") {
+		t.Errorf("chapter content was lost: %q", body)
 	}
 }
 
-// Аннотация приходит то объектом, то строкой — клиент должен переваривать оба вида.
+// The blurb arrives as an object one time and a string the next; the client must take both.
 func TestMangaSummaryBothShapes(t *testing.T) {
 	for _, body := range []string{
-		`{"data":{"id":1,"rus_name":"Книга","summary":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Аннотация."}]}]}}}`,
-		`{"data":{"id":1,"rus_name":"Книга","summary":"<p>Аннотация.</p>"}}`,
+		`{"data":{"id":1,"rus_name":"Book","summary":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"The blurb."}]}]}}}`,
+		`{"data":{"id":1,"rus_name":"Book","summary":"<p>The blurb.</p>"}}`,
 	} {
 		c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(body))
@@ -67,8 +67,8 @@ func TestMangaSummaryBothShapes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := m.Summary().PlainText(); got != "Аннотация." {
-			t.Errorf("аннотация разобрана как %q", got)
+		if got := m.Summary().PlainText(); got != "The blurb." {
+			t.Errorf("the blurb parsed as %q", got)
 		}
 	}
 }
@@ -83,17 +83,17 @@ func TestNotFoundIsPermanent(t *testing.T) {
 
 	_, err := c.Chapter(context.Background(), "1--test", ranobelib.ChapterRef{Volume: "1", Number: "1"})
 	if err == nil {
-		t.Fatal("ожидалась ошибка")
+		t.Fatal("expected an error")
 	}
 	if !errors.Is(err, ranobelib.ErrNotFound) {
-		t.Errorf("404 должен распознаваться как ErrNotFound, получено %v", err)
+		t.Errorf("a 404 must read as ErrNotFound, got %v", err)
 	}
 	if n := atomic.LoadInt32(&calls); n != 1 {
-		t.Errorf("404 повторять не нужно, а запросов было %d", n)
+		t.Errorf("a 404 must not be retried, but there were %d requests", n)
 	}
 }
 
-// 429 повторяется с учётом Retry-After, и об этом сообщают наружу.
+// A 429 is retried, honouring Retry-After, and the caller is told about it.
 func TestRetryAfterRateLimit(t *testing.T) {
 	var calls int32
 	var notices []ranobelib.Notice
@@ -108,10 +108,10 @@ func TestRetryAfterRateLimit(t *testing.T) {
 	}), ranobelib.WithNotifier(func(n ranobelib.Notice) { notices = append(notices, n) }))
 
 	if _, err := c.Chapters(context.Background(), "1--test"); err != nil {
-		t.Fatalf("после 429 запрос должен был повториться: %v", err)
+		t.Fatalf("the request should have been retried after a 429: %v", err)
 	}
 	if n := atomic.LoadInt32(&calls); n != 2 {
-		t.Errorf("ожидалось 2 запроса, было %d", n)
+		t.Errorf("expected 2 requests, got %d", n)
 	}
 	var throttled bool
 	for _, n := range notices {
@@ -120,7 +120,7 @@ func TestRetryAfterRateLimit(t *testing.T) {
 		}
 	}
 	if !throttled {
-		t.Error("о срабатывании рейт-лимита не сообщили наружу")
+		t.Error("the rate limit was never reported to the caller")
 	}
 }
 
@@ -132,14 +132,14 @@ func TestRetriesGiveUp(t *testing.T) {
 	_, err := c.Chapters(context.Background(), "1--test")
 	var apiErr *ranobelib.Error
 	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("ожидалась ошибка 500, получено %v", err)
+		t.Fatalf("expected a 500, got %v", err)
 	}
 	if !apiErr.Retryable {
-		t.Error("500 должна помечаться как повторяемая")
+		t.Error("a 500 must be marked retryable")
 	}
 }
 
-// Пауза между запросами выдерживается, иначе сайт быстро закроет доступ.
+// The pause between requests is honoured; otherwise the site cuts access quickly.
 func TestThrottleKeepsPause(t *testing.T) {
 	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"data":[]}`))
@@ -153,7 +153,7 @@ func TestThrottleKeepsPause(t *testing.T) {
 		}
 	}
 	if elapsed := time.Since(start); elapsed < 240*time.Millisecond {
-		t.Errorf("паузы между запросами не выдержаны: три запроса заняли %v", elapsed)
+		t.Errorf("pauses were not honoured: three requests took %v", elapsed)
 	}
 }
 
@@ -165,11 +165,11 @@ func TestContextCancels(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	// Первый запрос проходит сразу, второй упирается в паузу и должен отмениться.
+	// The first request goes straight out; the second hits the pause and must cancel.
 	if _, err := c.Chapters(ctx, "1--test"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.Chapters(ctx, "1--test"); !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("ожидалась отмена по контексту, получено %v", err)
+		t.Errorf("expected a context cancellation, got %v", err)
 	}
 }

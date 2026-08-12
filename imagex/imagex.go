@@ -1,13 +1,12 @@
-// Package imagex сжимает иллюстрации перед укладкой в книгу.
+// Package imagex shrinks illustrations before they go into a book.
 //
-// Всё делается внутри процесса: ни ImageMagick, ни ffmpeg, ни cgo не нужны.
-// Масштабирование берётся из golang.org/x/image/draw, кодирование JPEG —
-// из jpegli (кодировщик из libjxl, собранный в WASM): при одном и том же
-// значении качества он даёт файл примерно на 14% легче стандартного из
-// image/jpeg и при этом чуть ближе к оригиналу.
+// Everything happens in-process: no ImageMagick, no ffmpeg, no cgo. Scaling
+// comes from golang.org/x/image/draw and JPEG encoding from jpegli (the libjxl
+// encoder compiled to WASM), which at the same quality setting produces files
+// about 14% smaller than image/jpeg while staying slightly closer to the original.
 //
-// Оригиналы никогда не меняются: результат пишется в отдельный каталог,
-// поэтому книгу всегда можно пересобрать с другими настройками или без сжатия.
+// Originals are never modified: results are written to a separate directory, so
+// a book can always be rebuilt with different settings or with no compression.
 package imagex
 
 import (
@@ -23,31 +22,31 @@ import (
 	"github.com/gen2brain/jpegli"
 	xdraw "golang.org/x/image/draw"
 
-	// Регистрация декодеров: сайт отдаёт и такие форматы.
+	// Register the decoders: sites serve these formats too.
 	_ "golang.org/x/image/webp"
 	_ "image/gif"
 )
 
-// Result — что получилось из исходного файла.
+// Result is what became of a source file.
 type Result struct {
-	Path      string // путь к файлу, который надо класть в книгу
-	Name      string // имя файла; расширение могло смениться (png → jpg)
+	Path      string // file to put into the book
+	Name      string // file name; the extension may have changed (png to jpg)
 	MediaType string
 	Size      int64
-	// Changed сообщает, отличается ли результат от исходника.
+	// Changed reports whether the result differs from the source.
 	Changed bool
 }
 
-// Optimizer превращает исходный файл в тот, что попадёт в книгу.
-// Реализация вправе вернуть исходник как есть — это не ошибка.
+// Optimizer turns a source file into the one that goes into the book.
+// Returning the source unchanged is a valid answer, not an error.
 type Optimizer interface {
 	Optimize(srcPath string) (Result, error)
 }
 
-// Passthrough отдаёт файлы как есть — когда сжатие не нужно.
+// Passthrough hands files through untouched, for when compression is not wanted.
 type Passthrough struct{}
 
-// Optimize реализует Optimizer.
+// Optimize implements Optimizer.
 func (Passthrough) Optimize(src string) (Result, error) {
 	info, err := os.Stat(src)
 	if err != nil {
@@ -56,23 +55,23 @@ func (Passthrough) Optimize(src string) (Result, error) {
 	return Result{Path: src, Name: filepath.Base(src), MediaType: MediaType(ext(src)), Size: info.Size()}, nil
 }
 
-// Resizer уменьшает картинки и пережимает их в JPEG.
+// Resizer scales pictures down and re-encodes them as JPEG.
 //
-// Картинка с прозрачностью остаётся PNG: в JPEG у неё почернел бы фон.
-// Анимация (gif) не трогается — от неё осталась бы одна первая кадр.
+// A picture with transparency stays PNG: as JPEG its background would turn black.
+// Animations (gif) are left alone, since only the first frame would survive.
 type Resizer struct {
-	// MaxSize — предел по большей стороне в пикселях. 0 — не уменьшать.
+	// MaxSize caps the longer side in pixels. 0 means no scaling.
 	MaxSize int
-	// Quality — качество JPEG, 1..100. 0 означает 82.
+	// Quality is the JPEG quality, 1..100. 0 means 82.
 	Quality int
-	// Dir — куда складывать результат.
+	// Dir is where results are written.
 	Dir string
-	// Scaler задаёт качество масштабирования. По умолчанию CatmullRom:
-	// он заметно чётче билинейного на текстовых иллюстрациях и картах.
+	// Scaler controls scaling quality. CatmullRom by default: it is noticeably
+	// crisper than bilinear on maps and illustrations that contain text.
 	Scaler xdraw.Interpolator
 }
 
-// NewResizer готовит оптимизатор и создаёт каталог для результатов.
+// NewResizer prepares an optimizer and creates the output directory.
 func NewResizer(dir string, maxSize, quality int) (*Resizer, error) {
 	if quality <= 0 || quality > 100 {
 		quality = 82
@@ -83,8 +82,8 @@ func NewResizer(dir string, maxSize, quality int) (*Resizer, error) {
 	return &Resizer{MaxSize: maxSize, Quality: quality, Dir: dir, Scaler: xdraw.CatmullRom}, nil
 }
 
-// Optimize сжимает один файл. Если сжатая версия вышла тяжелее исходной,
-// возвращается исходная — так бывает с маленькими картинками.
+// Optimize compresses a single file. When the compressed version comes out
+// heavier than the original, the original is returned — small pictures do that.
 func (r *Resizer) Optimize(src string) (Result, error) {
 	info, err := os.Stat(src)
 	if err != nil {
@@ -109,7 +108,7 @@ func (r *Resizer) Optimize(src string) (Result, error) {
 	img, resized := r.fit(img)
 	transparent := hasAlpha(img)
 	if transparent && !resized {
-		return original, nil // перекодировать нечего: PNG останется PNG того же размера
+		return original, nil // nothing to re-encode: the PNG would stay the same size
 	}
 
 	target := "jpg"
@@ -132,7 +131,7 @@ func (r *Resizer) Optimize(src string) (Result, error) {
 	return Result{Path: dst, Name: name, MediaType: MediaType(target), Size: int64(len(out)), Changed: true}, nil
 }
 
-// fit уменьшает картинку до предела по большей стороне. Увеличивать не станет.
+// fit scales a picture down to the cap on its longer side. It never scales up.
 func (r *Resizer) fit(img image.Image) (image.Image, bool) {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
@@ -156,13 +155,13 @@ func encode(img image.Image, format string, quality int) ([]byte, error) {
 	if format == "png" {
 		var buf bytes.Buffer
 		if err := (&png.Encoder{CompressionLevel: png.BestCompression}).Encode(&buf, img); err != nil {
-			return nil, fmt.Errorf("imagex: кодирование png: %w", err)
+			return nil, fmt.Errorf("imagex: encoding png: %w", err)
 		}
 		return buf.Bytes(), nil
 	}
 
-	// Прозрачность к этому моменту исключена, но подложка не помешает:
-	// без неё полупрозрачные пиксели ушли бы в чёрный.
+	// Transparency is already ruled out by now, but the backing does no harm:
+	// without it, semi-transparent pixels would come out black.
 	var buf bytes.Buffer
 	err := jpegli.Encode(&buf, flatten(img), &jpegli.EncodingOptions{
 		Quality:              quality,
@@ -171,12 +170,12 @@ func encode(img image.Image, format string, quality int) ([]byte, error) {
 		AdaptiveQuantization: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("imagex: кодирование jpeg: %w", err)
+		return nil, fmt.Errorf("imagex: encoding jpeg: %w", err)
 	}
 	return buf.Bytes(), nil
 }
 
-// flatten кладёт картинку на белый фон, если у неё есть альфа-канал.
+// flatten composites a picture onto white when it has an alpha channel.
 func flatten(img image.Image) image.Image {
 	if !hasAlpha(img) {
 		return img
@@ -188,15 +187,15 @@ func flatten(img image.Image) image.Image {
 	return dst
 }
 
-// hasAlpha проверяет, есть ли в картинке хоть один непрозрачный не до конца пиксель.
-// Формат с альфа-каналом сам по себе ничего не значит: PNG сплошь и рядом полностью непрозрачны.
+// hasAlpha reports whether any pixel is less than fully opaque. The format alone
+// says nothing: PNGs are fully opaque more often than not.
 func hasAlpha(img image.Image) bool {
 	switch img.(type) {
 	case *image.YCbCr, *image.Gray, *image.CMYK:
-		return false // такие форматы альфа-канала не имеют вовсе
+		return false // these formats have no alpha channel at all
 	}
 	b := img.Bounds()
-	// Шаг по сетке: полный обход больших картинок стоит дороже самой пережимки.
+	// Sample on a grid: walking every pixel of a large picture costs more than the re-encode.
 	step := max(1, max(b.Dx(), b.Dy())/512)
 	for y := b.Min.Y; y < b.Max.Y; y += step {
 		for x := b.Min.X; x < b.Max.X; x += step {
@@ -208,7 +207,7 @@ func hasAlpha(img image.Image) bool {
 	return false
 }
 
-// MediaType возвращает MIME-тип по расширению файла.
+// MediaType returns a MIME type from a file extension.
 func MediaType(e string) string {
 	switch strings.ToLower(strings.TrimPrefix(e, ".")) {
 	case "png":

@@ -9,14 +9,14 @@ import (
 	"github.com/fess932/novelkit/novel"
 )
 
-// Document — содержимое главы в виде документа редактора ProseMirror.
+// Document is chapter content stored as a ProseMirror editor document.
 type Document struct {
 	root        node
 	attachments []Attachment
 }
 
-// ProseMirror разбирает документ редактора. Испорченный JSON даёт пустой
-// документ, а не ошибку: одна кривая глава не должна ронять книгу целиком.
+// ProseMirror parses an editor document. Broken JSON yields an empty document
+// rather than an error: one malformed chapter must not sink the whole book.
 func ProseMirror(raw json.RawMessage, attachments []Attachment) novel.Content {
 	var n node
 	if err := json.Unmarshal(raw, &n); err != nil {
@@ -25,9 +25,9 @@ func ProseMirror(raw json.RawMessage, attachments []Attachment) novel.Content {
 	return &Document{root: n, attachments: attachments}
 }
 
-// node — узел документа. Атрибуты хранятся сырыми и разбираются лениво:
-// сайт добавляет к ним поля по своему усмотрению, и строгий разбор
-// ломался бы на первой же незнакомой книге.
+// node is a document node. Attributes are kept raw and decoded lazily: sites
+// add fields to them as they please, and strict decoding would break on the
+// first unfamiliar book.
 type node struct {
 	Type    string          `json:"type"`
 	Text    string          `json:"text"`
@@ -48,12 +48,12 @@ type nodeAttrs struct {
 func (n node) attrs() nodeAttrs {
 	var a nodeAttrs
 	if len(n.Attrs) > 0 {
-		_ = json.Unmarshal(n.Attrs, &a) // мусор в атрибутах не повод терять текст
+		_ = json.Unmarshal(n.Attrs, &a) // junk in attributes is no reason to lose text
 	}
 	return a
 }
 
-// markTags — оформление текста, которое имеет смысл нести в книгу.
+// markTags lists the text styling worth carrying into a book.
 var markTags = map[string]string{
 	"bold":          "strong",
 	"strong":        "strong",
@@ -67,7 +67,7 @@ var markTags = map[string]string{
 	"code":          "code",
 }
 
-// XHTML реализует novel.Content.
+// XHTML implements novel.Content.
 func (d *Document) XHTML(images novel.ImageResolver) string {
 	if d == nil || d.root.Type == "" {
 		return ""
@@ -78,7 +78,7 @@ func (d *Document) XHTML(images novel.ImageResolver) string {
 	return strings.TrimSpace(b.String())
 }
 
-// PlainText реализует novel.Content.
+// PlainText implements novel.Content.
 func (d *Document) PlainText() string {
 	if d == nil || d.root.Type == "" {
 		return ""
@@ -129,7 +129,7 @@ func (r *pmRenderer) node(b *strings.Builder, n node) {
 		if s := strings.TrimSpace(inner.String()); s != "" {
 			b.WriteString("<p>" + s + "</p>\n")
 		} else {
-			// Пустой абзац на сайте работает отбивкой — сохраняем его.
+			// An empty paragraph is a scene break on these sites, so keep it.
 			b.WriteString("<p class=\"empty\"> </p>\n")
 		}
 
@@ -174,14 +174,14 @@ func (r *pmRenderer) node(b *strings.Builder, n node) {
 		r.image(b, n)
 
 	default:
-		// Незнакомый узел разворачиваем: текст внутри важнее обёртки.
+		// Unwrap unknown nodes: the text inside matters more than the wrapper.
 		r.children(b, n)
 	}
 }
 
 func (r *pmRenderer) text(n node) string {
 	out := esc(n.Text)
-	// Метки идут снаружи внутрь, поэтому оборачиваем в обратном порядке.
+	// Marks are listed outermost first, so wrap them in reverse.
 	for i := len(n.Marks) - 1; i >= 0; i-- {
 		m := n.Marks[i]
 		if m.Type == "link" {
@@ -217,21 +217,21 @@ func (r *pmRenderer) image(b *strings.Builder, n node) {
 		}
 		b.WriteString(`<div class="img"><img src="` + esc(path) + `" alt=""/></div>` + "\n")
 	}
-	// Подпись к иллюстрации часто содержит примечание переводчика — это текст, его нельзя терять.
+	// An illustration caption often holds a translator's note: that is text, and it must survive.
 	if d := strings.TrimSpace(a.Description); d != "" {
 		b.WriteString(`<p class="note">` + esc(d) + "</p>\n")
 	}
 }
 
-// esc экранирует текст для XML. html.EscapeString отдаёт числовые ссылки
-// вместо именованных, что для XHTML как раз правильно.
+// esc escapes text for XML. html.EscapeString emits numeric references rather
+// than named ones, which is exactly what XHTML wants.
 func esc(s string) string { return html.EscapeString(stripInvalidXML(s)) }
 
 func safeHref(href string) bool {
 	return !strings.HasPrefix(strings.ToLower(strings.TrimSpace(href)), "javascript:")
 }
 
-// stripInvalidXML выбрасывает управляющие символы, недопустимые в XML 1.0.
+// stripInvalidXML drops control characters that XML 1.0 forbids.
 func stripInvalidXML(s string) string {
 	return strings.Map(func(r rune) rune {
 		switch {
