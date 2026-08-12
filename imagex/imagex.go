@@ -3,9 +3,8 @@
 // Всё делается внутри процесса: ни ImageMagick, ни ffmpeg, ни cgo не нужны.
 // Масштабирование берётся из golang.org/x/image/draw, кодирование JPEG —
 // из jpegli (кодировщик из libjxl, собранный в WASM): при одном и том же
-// значении качества он даёт файл примерно на 14% легче стандартного и при этом
-// чуть ближе к оригиналу. Если он почему-то откажет, работает запасной путь
-// через image/jpeg из стандартной библиотеки.
+// значении качества он даёт файл примерно на 14% легче стандартного из
+// image/jpeg и при этом чуть ближе к оригиналу.
 //
 // Оригиналы никогда не меняются: результат пишется в отдельный каталог,
 // поэтому книгу всегда можно пересобрать с другими настройками или без сжатия.
@@ -16,7 +15,6 @@ import (
 	"fmt"
 	"image"
 	"image/draw"
-	"image/jpeg"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -165,25 +163,14 @@ func encode(img image.Image, format string, quality int) ([]byte, error) {
 
 	// Прозрачность к этому моменту исключена, но подложка не помешает:
 	// без неё полупрозрачные пиксели ушли бы в чёрный.
-	flat := flatten(img)
-
-	// jpegli при том же значении качества даёт файл примерно на 14% легче
-	// стандартного кодировщика и при этом чуть ближе к оригиналу по SSIM.
 	var buf bytes.Buffer
-	err := jpegli.Encode(&buf, flat, &jpegli.EncodingOptions{
+	err := jpegli.Encode(&buf, flatten(img), &jpegli.EncodingOptions{
 		Quality:              quality,
 		ChromaSubsampling:    image.YCbCrSubsampleRatio420,
 		OptimizeCoding:       true,
 		AdaptiveQuantization: true,
 	})
-	if err == nil {
-		return buf.Bytes(), nil
-	}
-
-	// Кодировщик из стандартной библиотеки как запасной путь: он проще,
-	// зато не подведёт никогда.
-	buf.Reset()
-	if err := jpeg.Encode(&buf, flat, &jpeg.Options{Quality: quality}); err != nil {
+	if err != nil {
 		return nil, fmt.Errorf("imagex: кодирование jpeg: %w", err)
 	}
 	return buf.Bytes(), nil
