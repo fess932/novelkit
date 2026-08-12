@@ -12,6 +12,7 @@ package ranobelib
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -133,8 +134,37 @@ func WithSiteID(id string) Option { return func(c *Client) { c.siteID = id } }
 // it does for a book that never existed. The token is the site's own access
 // token, taken from a browser session that is already signed in — the library
 // does not sign in for you and never sees a password.
+//
+// The browser keeps it inside an object with several fields, so the whole object
+// is accepted too and the access token is picked out of it. That saves the usual
+// mistake of pasting the refresh token, which the API does not accept.
+//
+// Tokens expire — a month, going by what the site issues — after which the API
+// starts refusing them and a fresh one has to be copied.
 func WithToken(token string) Option {
-	return func(c *Client) { c.token = strings.TrimSpace(token) }
+	return func(c *Client) { c.token = extractToken(token) }
+}
+
+// extractToken takes the access token out of whatever was pasted: the token
+// itself, or the JSON object the browser stores it in.
+func extractToken(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "{") {
+		return raw
+	}
+	var blob struct {
+		AccessToken string `json:"access_token"`
+		Token       struct {
+			AccessToken string `json:"access_token"`
+		} `json:"token"`
+	}
+	if err := json.Unmarshal([]byte(raw), &blob); err != nil {
+		return raw
+	}
+	if blob.AccessToken != "" {
+		return blob.AccessToken
+	}
+	return blob.Token.AccessToken
 }
 
 // WithCookie sends a raw Cookie header, e.g. "ranobelib_session=...".
@@ -299,10 +329,14 @@ func (c *Client) attempt(ctx context.Context, op, url, accept string) (body []by
 		// 4xx is not retried: a paid chapter, a typo in the slug, a removed book.
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		message := strings.TrimSpace(string(snippet))
+		switch {
 		// The site hides restricted titles behind the same 404 it uses for
 		// missing ones, so say so rather than let the caller chase a typo.
-		if resp.StatusCode == http.StatusNotFound && c.token == "" && c.cookie == "" {
+		case resp.StatusCode == http.StatusNotFound && c.token == "" && c.cookie == "":
 			message += " (no token: titles that require an account look exactly like this)"
+		// A token that used to work simply stops working after a month.
+		case resp.StatusCode == http.StatusUnauthorized && c.token != "":
+			message += " (the token was refused; it may have expired — copy a fresh one)"
 		}
 		return nil, "", 0, &Error{
 			Op: op, URL: url, StatusCode: resp.StatusCode,

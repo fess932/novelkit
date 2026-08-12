@@ -81,19 +81,28 @@ exactly as it does for a book that never existed. If a link opens in a signed-in
 browser but the tool reports "not found", that is what happened — and the error
 says so.
 
-Pass whatever a signed-in session actually carries. Open the book in a signed-in
-browser, look at a request to `api.cdnlibs.org` in the network tab, and copy the
-one that is there:
+The site authorises the API with a bearer token, which a signed-in browser keeps
+in an object like this:
+
+```json
+{"token_type": "Bearer", "expires_in": 2678400, "access_token": "eyJ0eXAi…", "refresh_token": "def50200…"}
+```
+
+The one that matters is `access_token`; `refresh_token` is not accepted. Pasting
+the whole object works too — the access token is picked out of it:
 
 ```sh
-export RANOBELIB_TOKEN='...'          # if the request has an Authorization header
-export RANOBELIB_COOKIE='ranobelib_session=...'   # if it authorises by cookie
+export RANOBELIB_TOKEN='eyJ0eXAi…'
 novelkit https://ranobelib.me/ru/book/230300--...
 ```
 
-Both are credentials of an existing session — nothing here signs in for you, and
+`expires_in` is about a month, so the token stops working eventually; a 401 then
+says as much and a fresh one has to be copied. If a session turns out to
+authorise by cookie instead, `RANOBELIB_COOKIE` (or `--cookie`) sends that.
+
+These are credentials of an existing session — nothing here signs in for you, and
 no password is ever involved. Keep them in the environment rather than in shell
-history, and treat a session cookie as carefully as a password.
+history, and treat them as carefully as a password.
 
 ### Stopping and resuming
 

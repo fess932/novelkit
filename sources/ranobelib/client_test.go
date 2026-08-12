@@ -236,3 +236,39 @@ func TestCookieIsSent(t *testing.T) {
 		t.Errorf("Authorization sent without a token: %q", auth)
 	}
 }
+
+// The browser stores the token inside an object, so pasting the whole thing works
+// and the refresh token is never mistaken for the access one.
+func TestTokenAcceptsBrowserBlob(t *testing.T) {
+	blobs := []string{
+		`{"token_type":"Bearer","expires_in":2678400,"access_token":"eyJreal","refresh_token":"def502nope"}`,
+		`{"token":{"token_type":"Bearer","access_token":"eyJreal","refresh_token":"def502nope"}}`,
+		"  eyJreal  ",
+	}
+	for _, blob := range blobs {
+		var got string
+		c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got = r.Header.Get("Authorization")
+			w.Write([]byte(`{"data":[]}`))
+		}), ranobelib.WithToken(blob))
+
+		if _, err := c.Chapters(context.Background(), "1--test"); err != nil {
+			t.Fatal(err)
+		}
+		if got != "Bearer eyJreal" {
+			t.Errorf("for %.30s… the header was %q", blob, got)
+		}
+	}
+}
+
+// An expired token is refused with a 401, which on its own explains nothing.
+func TestExpiredTokenSaysSo(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}), ranobelib.WithToken("eyJold"))
+
+	_, err := c.Manga(context.Background(), "1--test")
+	if err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Errorf("a 401 with a token should mention expiry: %v", err)
+	}
+}
