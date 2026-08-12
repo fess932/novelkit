@@ -96,13 +96,12 @@ export RANOBELIB_TOKEN='eyJ0eXAi…'
 novelkit https://ranobelib.me/ru/book/230300--...
 ```
 
-`expires_in` is about a month, so the token stops working eventually; a 401 then
-says as much and a fresh one has to be copied. If a session turns out to
-authorise by cookie instead, `RANOBELIB_COOKIE` (or `--cookie`) sends that.
+`expires_in` is 31 days exactly, so the token stops working after a month; a 401
+then says as much and a fresh one has to be copied.
 
-These are credentials of an existing session — nothing here signs in for you, and
-no password is ever involved. Keep them in the environment rather than in shell
-history, and treat them as carefully as a password.
+This is a credential of an existing session — nothing here signs in for you, and
+no password is ever involved. Keep it in the environment rather than in shell
+history, and treat it as carefully as a password.
 
 ### Stopping and resuming
 
@@ -139,7 +138,7 @@ translation, not the chapter numbers printed on the site.
 | `--build-only` | assemble from the cache, download nothing |
 | `--refresh-meta` | refresh the blurb, author and genres |
 | `--resume [dir]` / `--list-jobs` | resuming and the job list |
-| `--token <token>` / `--cookie <cookie>` | credentials of a signed-in session; some titles are invisible without them |
+| `--token <token>` | token of a signed-in session; some titles are invisible without it |
 | `--yes` | no questions |
 
 # The library
@@ -226,8 +225,8 @@ error has to do something different in each case.
 `DecodeChapter` turns it back into a chapter, so fixing a parser never means
 downloading anything again.
 
-`ranobelib.WithToken` and `ranobelib.WithCookie` do the same for library users:
-whichever is set rides along with every request, including file downloads.
+`ranobelib.WithToken` does the same for library users: the token rides along with
+every request, including file downloads.
 
 A source paces its own requests: the core does not do it, and sites cut off
 clients that hammer them. `sources/ranobelib` ships a client that does this —
