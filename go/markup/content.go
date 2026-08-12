@@ -11,7 +11,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/fess932/ranobelib/novel"
+	"github.com/fess932/novelkit/novel"
 )
 
 // Attachment — вложение главы: иллюстрация, на которую ссылается разметка.

@@ -6,7 +6,7 @@ import (
 	"html"
 	"strings"
 
-	"github.com/fess932/ranobelib/novel"
+	"github.com/fess932/novelkit/novel"
 )
 
 // Document — содержимое главы в виде документа редактора ProseMirror.

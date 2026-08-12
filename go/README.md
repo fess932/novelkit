@@ -8,7 +8,7 @@
 и работает с любым источником одинаково.
 
 ```go
-import "github.com/fess932/ranobelib/novel"
+import "github.com/fess932/novelkit/novel"
 ```
 
 ## Зависимости

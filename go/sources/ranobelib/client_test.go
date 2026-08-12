@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fess932/ranobelib/sources/ranobelib"
+	"github.com/fess932/novelkit/sources/ranobelib"
 )
 
 func testClient(t *testing.T, h http.Handler, opts ...ranobelib.Option) *ranobelib.Client {

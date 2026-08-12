@@ -1,4 +1,4 @@
-module github.com/fess932/ranobelib
+module github.com/fess932/novelkit
 
 go 1.25.0
 

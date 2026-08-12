@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/fess932/ranobelib/epub"
-	"github.com/fess932/ranobelib/imagex"
-	"github.com/fess932/ranobelib/novel"
+	"github.com/fess932/novelkit/epub"
+	"github.com/fess932/novelkit/imagex"
+	"github.com/fess932/novelkit/novel"
 )
 
 // BuildOptions настраивают сборку книги.

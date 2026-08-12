@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fess932/ranobelib/imagex"
-	"github.com/fess932/ranobelib/job"
-	"github.com/fess932/ranobelib/novel"
-	"github.com/fess932/ranobelib/sources/ranobelib"
+	"github.com/fess932/novelkit/imagex"
+	"github.com/fess932/novelkit/job"
+	"github.com/fess932/novelkit/novel"
+	"github.com/fess932/novelkit/sources/ranobelib"
 )
 
 // TestLive ходит на настоящий сайт: включается переменной RANOBELIB_LIVE=1.

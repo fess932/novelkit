@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fess932/ranobelib/epub"
+	"github.com/fess932/novelkit/epub"
 )
 
 func sample() *epub.Book {

@@ -22,9 +22,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fess932/ranobelib/epub"
-	"github.com/fess932/ranobelib/markup"
-	"github.com/fess932/ranobelib/novel"
+	"github.com/fess932/novelkit/epub"
+	"github.com/fess932/novelkit/markup"
+	"github.com/fess932/novelkit/novel"
 )
 
 // Version — версия формата задания. Каталог другой версии читать нельзя.

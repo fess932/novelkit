@@ -13,9 +13,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/fess932/ranobelib/job"
-	"github.com/fess932/ranobelib/markup"
-	"github.com/fess932/ranobelib/novel"
+	"github.com/fess932/novelkit/job"
+	"github.com/fess932/novelkit/markup"
+	"github.com/fess932/novelkit/novel"
 )
 
 // fakeSource — источник целиком в памяти. Он же проверяет, что интерфейс

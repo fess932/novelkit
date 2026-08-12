@@ -6,7 +6,7 @@ import (
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 
-	"github.com/fess932/ranobelib/novel"
+	"github.com/fess932/novelkit/novel"
 )
 
 // HTML — содержимое главы в виде разметки.

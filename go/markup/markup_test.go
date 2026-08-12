@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fess932/ranobelib/markup"
-	"github.com/fess932/ranobelib/novel"
+	"github.com/fess932/novelkit/markup"
+	"github.com/fess932/novelkit/novel"
 )
 
 // parse имитирует то, как содержимое приезжает внутри ответа API:

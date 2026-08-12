@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/fess932/ranobelib/novel"
+	"github.com/fess932/novelkit/novel"
 )
 
 // ID источника. Попадает в кэш заданий, поэтому менять его нельзя.

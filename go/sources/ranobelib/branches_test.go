@@ -3,7 +3,7 @@ package ranobelib_test
 import (
 	"testing"
 
-	"github.com/fess932/ranobelib/sources/ranobelib"
+	"github.com/fess932/novelkit/sources/ranobelib"
 )
 
 func chapter(index int, branchIDs []int, team, user string) ranobelib.ChapterInfo {

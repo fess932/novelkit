@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/fess932/ranobelib/novel"
+	"github.com/fess932/novelkit/novel"
 )
 
 // DownloadOptions настраивают ход загрузки.

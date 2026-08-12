@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/fess932/ranobelib/markup"
-	"github.com/fess932/ranobelib/novel"
+	"github.com/fess932/novelkit/markup"
+	"github.com/fess932/novelkit/novel"
 )
 
 // Attachment — вложение главы. Тип живёт в markup: именно он разбирает
