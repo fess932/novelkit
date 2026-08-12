@@ -1,0 +1,17 @@
+{
+  "name": "ranobelib-epub",
+  "version": "1.0.0",
+  "description": "Скачивание ранобэ с ranobelib.me в EPUB с выбором команды перевода",
+  "type": "module",
+  "bin": {
+    "rlib": "./bin/rlib.js"
+  },
+  "engines": {
+    "node": ">=20.6"
+  },
+  "scripts": {
+    "start": "node bin/rlib.js"
+  },
+  "license": "MIT",
+  "private": true
+}

@@ -1,0 +1,21 @@
+# Скачанные книги и кэш заданий: чужой текст и сотни мегабайт картинок.
+# В репозиторий это попасть не должно ни при каких обстоятельствах.
+.rlib/
+*.epub
+
+# Node
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# Go
+*.test
+*.out
+coverage.*
+vendor/
+
+# macOS и редакторы
+.DS_Store
+.idea/
+.vscode/
+*.swp
