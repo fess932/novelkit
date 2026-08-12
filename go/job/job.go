@@ -4,6 +4,8 @@
 // и картинки в assets/. Каждая глава отмечается выполненной сразу после записи,
 // поэтому обрыв на любой главе не теряет предыдущие: следующий запуск продолжит
 // ровно с места остановки.
+//
+// Пакет не знает ни про один сайт: он работает с любым novel.Source.
 package job
 
 import (
@@ -16,24 +18,27 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/fess932/ranobelib"
 	"github.com/fess932/ranobelib/epub"
+	"github.com/fess932/ranobelib/markup"
+	"github.com/fess932/ranobelib/novel"
 )
 
 // Version — версия формата задания. Каталог другой версии читать нельзя.
 const Version = 1
 
-// Source описывает, что именно качается.
-type Source struct {
-	Slug        string `json:"slug"`
-	URL         string `json:"url"`
-	BranchID    int    `json:"branch_id"`
-	BranchLabel string `json:"branch_label"`
+// SourceRef говорит, откуда и что качается.
+type SourceRef struct {
+	// ID источника, например "ranobelib". По нему задание находит нужный сайт.
+	ID     string `json:"id"`
+	BookID string `json:"book_id"`
+	// EditionID — выбранный перевод; пустой, если у сайта переводов нет.
+	EditionID    string `json:"edition_id"`
+	EditionLabel string `json:"edition_label"`
+	BookURL      string `json:"book_url"`
 }
 
 // Asset — скачанная картинка.
@@ -44,6 +49,7 @@ type Asset struct {
 
 // ChapterState — глава задания и признак того, что она уже скачана.
 type ChapterState struct {
+	ID     string `json:"id,omitempty"`
 	Index  int    `json:"index"`
 	Volume string `json:"volume"`
 	Number string `json:"number"`
@@ -51,10 +57,13 @@ type ChapterState struct {
 	Done   bool   `json:"done"`
 }
 
-// Title собирает заголовок главы.
-func (c ChapterState) Title() string {
-	return ranobelib.ChapterInfo{Number: c.Number, Name: c.Name}.Title()
+// Info возвращает главу в общем виде.
+func (c ChapterState) Info() novel.ChapterInfo {
+	return novel.ChapterInfo{ID: c.ID, Index: c.Index, Volume: c.Volume, Number: c.Number, Name: c.Name}
 }
+
+// Title собирает заголовок главы.
+func (c ChapterState) Title() string { return c.Info().Title() }
 
 // State — содержимое job.json.
 type State struct {
@@ -62,11 +71,11 @@ type State struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
-	Source     Source           `json:"source"`
+	Source     SourceRef        `json:"source"`
 	WithImages bool             `json:"with_images"`
 	Book       epub.Metadata    `json:"book"`
 	Cover      *Asset           `json:"cover,omitempty"`
-	Assets     map[string]Asset `json:"assets"` // ключ — абсолютный адрес картинки
+	Assets     map[string]Asset `json:"assets"` // ключ — адрес картинки
 	Chapters   []ChapterState   `json:"chapters"`
 	Warnings   []string         `json:"warnings,omitempty"`
 }
@@ -82,14 +91,14 @@ func (p Progress) Left() int { return p.Total - p.Done }
 
 // Request описывает, что нужно скачать.
 type Request struct {
-	// Slug книги, например "14841--beginning-after-the-end-novel".
-	Slug string
-	// BranchID — ветка перевода; 0 означает ветку без идентификатора.
-	BranchID int
-	// From и To — позиции глав внутри ветки, начиная с 1.
+	// BookID — идентификатор книги внутри источника.
+	BookID string
+	// EditionID — выбранный перевод. Пустой означает единственный или безымянный.
+	EditionID string
+	// From и To — позиции глав внутри перевода, начиная с 1.
 	// To <= 0 означает «до последней главы».
 	From, To int
-	// WithImages включает скачивание иллюстраций.
+	// WithImages включает скачивание иллюстраций и обложки.
 	WithImages bool
 }
 
@@ -161,11 +170,7 @@ func (s *Store) List() ([]*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	type dated struct {
-		job *Job
-		at  time.Time
-	}
-	found := make([]dated, 0, len(entries))
+	jobs := make([]*Job, 0, len(entries))
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -174,14 +179,11 @@ func (s *Store) List() ([]*Job, error) {
 		if err != nil {
 			continue // чужой или недописанный каталог просто пропускаем
 		}
-		found = append(found, dated{j, j.state.UpdatedAt})
+		jobs = append(jobs, j)
 	}
-	sort.SliceStable(found, func(i, k int) bool { return found[i].at.After(found[k].at) })
-
-	jobs := make([]*Job, len(found))
-	for i, f := range found {
-		jobs[i] = f.job
-	}
+	sort.SliceStable(jobs, func(i, k int) bool {
+		return jobs[i].state.UpdatedAt.After(jobs[k].state.UpdatedAt)
+	})
 	return jobs, nil
 }
 
@@ -207,53 +209,49 @@ func (s *Store) Open(dir string) (*Job, error) {
 // Plan создаёт задание или дополняет существующее.
 //
 // Уже скачанные главы не трогаются: если расширить диапазон, докачаются только
-// новые. Требует трёх запросов к сайту — карточка книги, список глав и ветки.
-func (s *Store) Plan(ctx context.Context, c *ranobelib.Client, req Request) (*Job, error) {
-	manga, err := c.Manga(ctx, req.Slug)
+// новые. Ходит в сеть за карточкой книги, списком глав и обложкой.
+func (s *Store) Plan(ctx context.Context, src novel.Source, req Request) (*Job, error) {
+	book, err := src.Book(ctx, req.BookID)
 	if err != nil {
 		return nil, err
 	}
-	chapters, err := c.Chapters(ctx, req.Slug)
+	chapters, err := src.Chapters(ctx, req.BookID, req.EditionID)
 	if err != nil {
 		return nil, err
 	}
-	cards, _ := c.Branches(ctx, manga.ID) // необязательно: без них останутся подписи по главам
-
-	branches := ranobelib.CollectBranches(chapters, cards)
-	var branch ranobelib.Branch
-	for _, b := range branches {
-		if b.ID == req.BranchID {
-			branch = b
-			break
-		}
-	}
-	if branch.Count == 0 {
-		return nil, fmt.Errorf("job: в ветке %d нет глав", req.BranchID)
+	if len(chapters) == 0 {
+		return nil, fmt.Errorf("job: в выбранном переводе нет глав")
 	}
 
-	list := ranobelib.ChaptersOfBranch(chapters, req.BranchID)
+	edition, ok := book.Edition(req.EditionID)
+	if !ok {
+		// У источника может не быть переводов как таковых — это нормально.
+		edition = novel.Edition{ID: req.EditionID, Chapters: len(chapters)}
+	}
+
+	novel.SortChapters(chapters)
 	from, to := req.From, req.To
 	if from < 1 {
 		from = 1
 	}
-	if to <= 0 || to > len(list) {
-		to = len(list)
+	if to <= 0 || to > len(chapters) {
+		to = len(chapters)
 	}
 	if from > to {
 		return nil, fmt.Errorf("job: пустой диапазон глав %d–%d", from, to)
 	}
-	list = list[from-1 : to]
+	chapters = chapters[from-1 : to]
 
-	dir := filepath.Join(s.root, dirName(req.Slug, req.BranchID))
+	dir := filepath.Join(s.root, dirName(src.ID(), req.BookID, req.EditionID))
 	for _, sub := range []string{"chapters", "assets"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
 			return nil, err
 		}
 	}
 
-	job, err := s.Open(dir)
+	j, err := s.Open(dir)
 	if err != nil {
-		job = &Job{dir: dir, state: State{
+		j = &Job{dir: dir, state: State{
 			Version:   Version,
 			CreatedAt: time.Now(),
 			Assets:    map[string]Asset{},
@@ -263,100 +261,95 @@ func (s *Store) Plan(ctx context.Context, c *ranobelib.Client, req Request) (*Jo
 	// Обновление состояния держим в отдельной области видимости:
 	// скачивание обложки ниже само берёт этот же мьютекс.
 	if err := func() error {
-		job.mu.Lock()
-		defer job.mu.Unlock()
+		j.mu.Lock()
+		defer j.mu.Unlock()
 
 		// Скачанное сохраняем, новые главы добавляем.
-		done := make(map[int]ChapterState, len(job.state.Chapters))
-		for _, ch := range job.state.Chapters {
+		done := make(map[int]ChapterState, len(j.state.Chapters))
+		for _, ch := range j.state.Chapters {
 			done[ch.Index] = ch
 		}
-		next := make([]ChapterState, 0, len(list))
-		for _, ci := range list {
+		next := make([]ChapterState, 0, len(chapters))
+		for _, ci := range chapters {
 			if prev, ok := done[ci.Index]; ok {
 				next = append(next, prev)
 				continue
 			}
-			next = append(next, ChapterState{Index: ci.Index, Volume: ci.Volume, Number: ci.Number, Name: ci.Name})
+			next = append(next, ChapterState{
+				ID: ci.ID, Index: ci.Index, Volume: ci.Volume, Number: ci.Number, Name: ci.Name,
+			})
 		}
 
-		job.state.Version = Version
-		job.state.Chapters = next
-		job.state.WithImages = req.WithImages
-		job.state.Source = Source{
-			Slug:        req.Slug,
-			URL:         manga.URL(c.SiteURL()),
-			BranchID:    req.BranchID,
-			BranchLabel: branch.Label(),
+		j.state.Version = Version
+		j.state.Chapters = next
+		j.state.WithImages = req.WithImages
+		j.state.Source = SourceRef{
+			ID:           src.ID(),
+			BookID:       req.BookID,
+			EditionID:    req.EditionID,
+			EditionLabel: edition.Label(),
+			BookURL:      book.URL,
 		}
-		job.state.Book = Metadata(manga, branch, c.SiteURL())
-		return job.save()
+		j.state.Book = Metadata(book, edition)
+		return j.save()
 	}(); err != nil {
 		return nil, err
 	}
-	if req.WithImages {
-		if err := job.fetchCover(ctx, c, manga); err != nil {
-			job.warn(fmt.Sprintf("обложка не скачалась: %v", err))
+
+	if req.WithImages && book.CoverURL != "" {
+		if err := j.fetchCover(ctx, src, book.CoverURL); err != nil {
+			j.warn(fmt.Sprintf("обложка не скачалась: %v", err))
 		}
 	}
-	return job, nil
+	return j, nil
 }
 
-// Metadata собирает метаданные книги из карточки сайта и ветки перевода.
-func Metadata(m *ranobelib.Manga, branch ranobelib.Branch, site string) epub.Metadata {
-	title := m.Title()
-	original := m.EngName
-	if original == title {
-		original = m.Name
-	}
-	publisher := ""
-	if len(m.Publisher) > 0 {
-		publisher = m.Publisher[0].Title()
-	}
+// Metadata собирает метаданные книги из карточки источника и выбранного перевода.
+func Metadata(b *novel.Book, edition novel.Edition) epub.Metadata {
 	return epub.Metadata{
-		Title:         title,
-		OriginalTitle: original,
+		Title:         b.Title,
+		OriginalTitle: b.OriginalTitle,
 		Language:      "ru",
-		Authors:       m.AuthorNames(),
-		Translators:   branch.Translators(),
-		Genres:        m.GenreNames(),
-		Publisher:     publisher,
-		Date:          m.ReleaseDate,
-		Description:   m.Summary.PlainText(),
-		Source:        m.URL(site),
+		Authors:       b.Authors,
+		Translators:   edition.Translators(),
+		Genres:        b.Genres,
+		Publisher:     b.Publisher,
+		Date:          b.Year,
+		Description:   b.Description,
+		Source:        b.URL,
 	}
 }
 
-// RefreshMetadata перечитывает карточку книги: один запрос.
-// Ветка перевода и список глав не трогаются.
-func (j *Job) RefreshMetadata(ctx context.Context, c *ranobelib.Client) error {
-	manga, err := c.Manga(ctx, j.state.Source.Slug)
+// RefreshMetadata перечитывает карточку книги. Список глав не трогается,
+// перевод остаётся прежним.
+func (j *Job) RefreshMetadata(ctx context.Context, src novel.Source) error {
+	st := j.State()
+	book, err := src.Book(ctx, st.Source.BookID)
 	if err != nil {
 		return err
 	}
+	edition, ok := book.Edition(st.Source.EditionID)
+	if !ok {
+		edition = novel.Edition{Teams: st.Book.Translators}
+	}
+
 	j.mu.Lock()
 	defer j.mu.Unlock()
-
-	translators := j.state.Book.Translators
-	j.state.Book = Metadata(manga, ranobelib.Branch{}, c.SiteURL())
-	j.state.Book.Translators = translators
+	j.state.Book = Metadata(book, edition)
 	return j.save()
 }
 
-func (j *Job) fetchCover(ctx context.Context, c *ranobelib.Client, m *ranobelib.Manga) error {
-	url := m.Cover.URL()
-	if url == "" {
-		return nil
-	}
-	data, _, err := c.Fetch(ctx, url)
+func (j *Job) fetchCover(ctx context.Context, src novel.Source, url string) error {
+	data, _, err := src.Fetch(ctx, url)
 	if err != nil {
 		return err
 	}
 	ext := extOf(url)
 	name := "cover." + ext
-	if err := writeFileAtomic(filepath.Join(j.dir, "assets", name), data); err != nil {
+	if err := writeFileAtomic(j.assetPath(name), data); err != nil {
 		return err
 	}
+
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.state.Cover = &Asset{File: name, Ext: ext}
@@ -396,12 +389,12 @@ func (j *Job) assetPath(name string) string { return filepath.Join(j.dir, "asset
 
 var unsafeName = regexp.MustCompile(`[^\w.-]+`)
 
-func dirName(slug string, branchID int) string {
-	name := unsafeName.ReplaceAllString(slug, "_")
-	if branchID == 0 {
+func dirName(sourceID, bookID, editionID string) string {
+	name := unsafeName.ReplaceAllString(sourceID+"-"+bookID, "_")
+	if editionID == "" {
 		return name + "--default"
 	}
-	return name + "--b" + strconv.Itoa(branchID)
+	return name + "--" + unsafeName.ReplaceAllString(editionID, "_")
 }
 
 // assetName даёт имя, устойчивое между запусками: зависит только от адреса.
@@ -414,11 +407,11 @@ func assetName(url, ext string) string {
 }
 
 func extOf(u string) string {
-	if i := strings.IndexAny(u, "?#"); i >= 0 {
-		u = u[:i]
-	}
-	if i := strings.LastIndex(u, "."); i >= 0 && len(u)-i <= 6 {
-		return strings.ToLower(u[i+1:])
+	if e := markup.ExtOf(u); e != "" {
+		return e
 	}
 	return "jpg"
 }
+
+// trimSpace вынесен, чтобы не тянуть strings ради одного вызова в других файлах пакета.
+func trimSpace(s string) string { return strings.TrimSpace(s) }

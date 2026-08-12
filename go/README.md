@@ -1,10 +1,14 @@
 # ranobelib — библиотека на Go
 
-Скачивание книг с ranobelib.me и сборка EPUB. Библиотека, не приложение:
-интерфейс пользователя, выбор ветки перевода и показ прогресса — на стороне того, кто её встраивает.
+Скачивание книг с сайтов-читалок и сборка EPUB. Библиотека, не приложение:
+интерфейс пользователя, выбор перевода и показ прогресса — на стороне того, кто её встраивает.
+
+Ядро не знает ни про один сайт. Новый сайт подключается реализацией одного интерфейса,
+всё остальное — кэш, докачка после обрыва, сборка книги, сжатие картинок — уже написано
+и работает с любым источником одинаково.
 
 ```go
-import "github.com/fess932/ranobelib"
+import "github.com/fess932/ranobelib/novel"
 ```
 
 ## Зависимости
@@ -13,46 +17,49 @@ import "github.com/fess932/ranobelib"
 | --- | --- | --- |
 | Go 1.24+ | сама библиотека | да |
 | `golang.org/x/net` | разбор HTML-разметки глав | да |
-| ImageMagick (`magick`) | пакет `imagex`, сжатие иллюстраций | нет |
+| `golang.org/x/image` | масштабирование иллюстраций | да |
 
-## Пакеты
+Внешних программ не нужно вообще: ни ImageMagick, ни ffmpeg, ни cgo.
+Сжатие целиком внутри процесса — стандартные кодеки плюс ресемплер из `x/image/draw`.
 
-| Пакет | Отвечает за |
-| --- | --- |
-| `ranobelib` | клиент API: поиск, карточка книги, главы, ветки перевода, темп запросов |
-| `ranobelib/content` | разбор содержимого главы в XHTML и в простой текст |
-| `ranobelib/epub` | сборка EPUB 3 с оглавлением, обложкой и метаданными |
-| `ranobelib/job` | кэш заданий на диске: докачка после обрыва и сборка книги |
-| `ranobelib/imagex` | сжатие иллюстраций через ImageMagick |
+## Слои
 
-Слои независимы: можно взять только клиент, только сборщик EPUB или всё вместе.
+| Пакет | Отвечает за | Знает про сайты |
+| --- | --- | --- |
+| `novel` | общие типы и интерфейс `Source` | нет |
+| `markup` | разметка → XHTML: HTML и ProseMirror | нет |
+| `epub` | сборка EPUB 3 | нет |
+| `job` | кэш заданий, докачка, сборка из кэша | нет |
+| `imagex` | уменьшение и пережатие картинок | нет |
+| `sources/ranobelib` | ranobelib.me | да |
+
+Слои независимы: можно взять только сборщик EPUB, только разбор разметки или всё вместе.
 
 ## Пример
 
 ```go
 ctx := context.Background()
-c := ranobelib.New()
 
-// 1. Что за книга и чьи переводы у неё есть
-manga, err := c.Manga(ctx, "14841--beginning-after-the-end-novel")
-chapters, err := c.Chapters(ctx, manga.SlugURL)
-cards, err := c.Branches(ctx, manga.ID)
+var registry novel.Registry
+registry.Register(ranobelib.NewSource())
 
-for _, b := range ranobelib.CollectBranches(chapters, cards) {
-    fmt.Printf("%d: %s — %d гл.\n", b.ID, b.Label(), b.Count)
+src, bookID, err := registry.Resolve("https://ranobelib.me/ru/book/14841--beginning-after-the-end-novel")
+
+book, err := src.Book(ctx, bookID)
+for _, e := range book.Editions {
+    fmt.Printf("%s: %s — %d гл.\n", e.ID, e.Label(), e.Chapters)
 }
 // 9824: Silent Step & Эрл Грей — 550 гл.
 // 9823: Kyu Team & Rulate Project & FiuTeam — 301 гл.
 // 26435: Альтернативный перевод — 0 гл.
 
-// 2. Задание: ветка, диапазон глав, иллюстрации
 store, err := job.OpenStore(".rlib")
-j, err := store.Plan(ctx, c, job.Request{
-    Slug: manga.SlugURL, BranchID: 9824, From: 1, To: 100, WithImages: true,
+j, err := store.Plan(ctx, src, job.Request{
+    BookID: bookID, EditionID: "9824", From: 1, To: 100, WithImages: true,
 })
 
-// 3. Загрузка — останавливается на первой ошибке, продолжается с того же места
-err = j.Download(ctx, c, job.DownloadOptions{
+// Останавливается на первой ошибке; повторный вызов продолжает с того же места
+err = j.Download(ctx, src, job.DownloadOptions{
     OnChapter: func(e job.Event) {
         fmt.Printf("%d/%d %s (осталось ~%v)\n", e.Progress.Done, e.Progress.Total, e.Chapter.Title(), e.ETA)
     },
@@ -62,27 +69,39 @@ if errors.As(err, &chErr) {
     fmt.Printf("остановились на главе %s: %v\n", chErr.Chapter.Number, chErr.Err)
 }
 
-// 4. Сборка книги — в сеть не ходит
-opt, _ := imagex.NewMagick(filepath.Join(j.Dir(), "min"), 1200, 82)
-res, err := j.BuildFile(ctx, "книга.epub", job.BuildOptions{Optimizer: opt})
+// Сборка в сеть не ходит
+opt, _ := imagex.NewResizer(filepath.Join(j.Dir(), "min"), 1200, 82)
+res, err := j.BuildFile(ctx, src, "книга.epub", job.BuildOptions{Optimizer: opt})
 ```
 
-## Темп запросов
+## Как подключить новый сайт
 
-Клиент сам держит паузу между запросами и ходит на сайт строго последовательно:
-параллельных обращений не бывает даже при вызовах из разных горутин.
+Реализовать `novel.Source` — девять методов:
 
 ```go
-c := ranobelib.New(
-    ranobelib.WithThrottle(1500*time.Millisecond, 700*time.Millisecond), // пауза + случайный разброс
-    ranobelib.WithRetries(4),
-    ranobelib.WithNotifier(func(n ranobelib.Notice) { log.Println(n.Message) }),
-)
+type Source interface {
+    ID() string                                                    // "ranobelib"
+    Supports(rawURL string) bool
+    ParseRef(rawURL string) (bookID string, ok bool)
+    Search(ctx, query string) ([]Book, error)                      // можно вернуть ErrUnsupported
+    Book(ctx, bookID string) (*Book, error)                        // карточка + список переводов
+    Chapters(ctx, bookID, editionID string) ([]ChapterInfo, error)
+    Chapter(ctx, bookID, editionID string, ci ChapterInfo) (*Chapter, error)
+    DecodeChapter(raw []byte) (*Chapter, error)                    // глава из кэша
+    Fetch(ctx, rawURL string) ([]byte, string, error)              // картинки и обложка
+}
 ```
 
-На 429 и 503 пауза временно растёт (с оглядкой на `Retry-After`) и постепенно возвращается
-к исходной. 4xx не повторяются: `errors.Is(err, ranobelib.ErrNotFound)` отличает платную или
-удалённую главу от временной беды. Отмена через `context` работает и во время паузы.
+Разбор разметки писать не нужно: в `markup` уже есть `markup.HTML` для сайтов, отдающих
+главу разметкой, и `markup.ProseMirror` для документов редактора. Оба реализуют
+`novel.Content`, а `markup.Auto` выбирает подходящий сам, если сайт отдаёт то одно, то другое.
+
+`Chapter.Raw` — сырой ответ сайта; кэш хранит именно его, а обратно превращает `DecodeChapter`.
+Поэтому починка разбора не требует перекачивать уже скачанное.
+
+Темп запросов источник держит сам: ядро за него этого не делает, а сайты за частые
+обращения закрывают доступ. В `sources/ranobelib` для этого есть готовый клиент с
+последовательной очередью, паузой со случайным разбросом и отработкой 429.
 
 ## Загрузка и докачка
 
@@ -92,32 +111,29 @@ c := ranobelib.New(
 - `Download` возвращает `*job.ChapterError` — видно, на какой главе всё встало и почему;
 - повторный вызов докачивает только недостающее;
 - расширение диапазона в `Plan` не трогает уже скачанное;
-- `Build` собирает книгу из кэша и в сеть не ходит вообще; недокачанные главы пропускаются
-  и считаются в `BuildResult.Missing`.
+- `Build` собирает книгу из кэша и в сеть не ходит; недокачанные главы пропускаются
+  и считаются в `BuildResult.Missing`;
+- задание помнит свой источник и не даст скачивать себя чужим.
 
-## Разметка
-
-Сайт отдаёт содержимое главы в двух видах — ProseMirror-документом и HTML-строкой,
-и оба приводятся к одному XHTML. Неизвестные теги разворачиваются (текст не теряется),
-скрипты и стили выбрасываются, незакрытые теги закрываются.
-
-Картинки проходят через `content.ImageResolver` — он решает, что положить в `src` и
-класть ли картинку вообще:
+## Сжатие иллюстраций
 
 ```go
-body := chapter.Content.XHTML(content.Options{
-    Attachments: chapter.Attachments,
-    Images: content.ResolverFunc(func(img content.Image) (string, bool) {
-        return "../images/" + save(img.URL), true
-    }),
-})
+opt, err := imagex.NewResizer(dir, 1200, 82) // предел по большей стороне, качество jpeg
 ```
 
-Аннотация книги приходит в тех же двух видах — `manga.Summary.PlainText()` разбирает оба.
+Оригиналы не трогаются: результат пишется в отдельный каталог, поэтому книгу всегда можно
+пересобрать с другими настройками или вовсе без сжатия (`imagex.Passthrough{}`).
+
+На реальной книге — 318 иллюстраций, 248 МБ — получается 24.4 МБ за 25 секунд.
+Для сравнения, ImageMagick на тех же настройках даёт 24.0 МБ: разница 1.7%, ради которой
+внешнюю программу тянуть незачем.
+
+Картинка с прозрачностью остаётся PNG (в JPEG у неё почернел бы фон), анимация не трогается,
+а если пережатая версия вышла тяжелее исходной — берётся исходная.
 
 ## Сборка EPUB отдельно
 
-`epub.Book` не знает про сайт: ему можно скормить любые главы.
+`epub.Book` не знает ни про сайты, ни про кэш: ему можно скормить любые главы.
 
 ```go
 book := &epub.Book{
@@ -139,12 +155,15 @@ err := book.WriteFile("книга.epub")   // или book.WriteTo(w), book.Bytes
 - **строгий разбор JSON**: там, где JS молча проглатывал неожиданный тип поля
   (и однажды положил в аннотацию `[object Object]`), Go вернёт ошибку. Поля, которые сайт
   отдаёт в разных формах — содержимое главы и аннотация — хранятся сырыми и разбираются явно;
-- **сжатие только через ImageMagick**, без запасного пути на `sips`.
+- **сжатие без внешних программ**, тогда как JS-версия зовёт ImageMagick.
 
 ## Тесты
 
 ```sh
-go test ./...                 # без сети, включая полный цикл на локальном сервере
+go test ./...                 # без сети: разметка, EPUB, полный цикл на поддельном источнике
 go test -race ./...
-RANOBELIB_LIVE=1 go test -run TestLive -v .   # живой прогон: две главы с сайта
+RANOBELIB_LIVE=1 go test -run TestLive -v ./sources/ranobelib/   # живой прогон: две главы
 ```
+
+Тесты пакета `job` написаны на поддельном источнике, в котором нет ни строчки про ranobelib —
+заодно это проверка того, что интерфейса хватает для нового сайта.

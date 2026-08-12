@@ -2,14 +2,11 @@ package job
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"time"
 
-	"github.com/fess932/ranobelib"
-	"github.com/fess932/ranobelib/content"
+	"github.com/fess932/ranobelib/novel"
 )
 
 // DownloadOptions настраивают ход загрузки.
@@ -48,7 +45,7 @@ func (e *ChapterError) Unwrap() error { return e.Err }
 // Останавливается на первой неустранимой ошибке и возвращает *ChapterError:
 // всё, что успело скачаться, уже лежит в кэше, повторный вызов продолжит с того же места.
 // Отмена контекста тоже останавливает загрузку без потери скачанного.
-func (j *Job) Download(ctx context.Context, c *ranobelib.Client, opts DownloadOptions) error {
+func (j *Job) Download(ctx context.Context, src novel.Source, opts DownloadOptions) error {
 	started := time.Now()
 	var fetched int
 
@@ -56,10 +53,13 @@ func (j *Job) Download(ctx context.Context, c *ranobelib.Client, opts DownloadOp
 	// поэтому параллельный вызов State() не увидит его на полпути.
 	j.mu.Lock()
 	chapters := append([]ChapterState(nil), j.state.Chapters...)
-	slug := j.state.Source.Slug
-	branchID := j.state.Source.BranchID
+	ref := j.state.Source
 	withImages := j.state.WithImages
 	j.mu.Unlock()
+
+	if ref.ID != src.ID() {
+		return fmt.Errorf("job: задание сделано источником %q, а передан %q", ref.ID, src.ID())
+	}
 
 	for i, ch := range chapters {
 		if ch.Done && j.hasChapter(ch.Index) {
@@ -69,26 +69,20 @@ func (j *Job) Download(ctx context.Context, c *ranobelib.Client, opts DownloadOp
 			return err
 		}
 
-		chapter, err := c.Chapter(ctx, slug, ranobelib.ChapterRef{
-			Volume: ch.Volume, Number: ch.Number, BranchID: branchID,
-		})
+		chapter, err := src.Chapter(ctx, ref.BookID, ref.EditionID, ch.Info())
 		if err != nil {
-			if errors.Is(err, ctx.Err()) {
-				return err
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
 			return &ChapterError{Chapter: ch, Err: err}
 		}
 
-		data, err := json.Marshal(chapter)
-		if err != nil {
-			return &ChapterError{Chapter: ch, Err: err}
-		}
-		if err := writeFileAtomic(j.chapterPath(ch.Index), data); err != nil {
+		if err := writeFileAtomic(j.chapterPath(ch.Index), chapter.Raw); err != nil {
 			return &ChapterError{Chapter: ch, Err: err}
 		}
 
 		if withImages {
-			if err := j.fetchImages(ctx, c, chapter, opts); err != nil {
+			if err := j.fetchImages(ctx, src, chapter, opts); err != nil {
 				return &ChapterError{Chapter: ch, Err: err}
 			}
 		}
@@ -108,17 +102,11 @@ func (j *Job) Download(ctx context.Context, c *ranobelib.Client, opts DownloadOp
 		fetched++
 		if opts.OnChapter != nil {
 			elapsed := time.Since(started)
-			left := progress.Left()
 			var eta time.Duration
-			if left > 0 && fetched > 0 {
+			if left := progress.Left(); left > 0 {
 				eta = time.Duration(int64(elapsed) / int64(fetched) * int64(left))
 			}
-			opts.OnChapter(Event{
-				Chapter:  ch,
-				Progress: progress,
-				Elapsed:  elapsed,
-				ETA:      eta,
-			})
+			opts.OnChapter(Event{Chapter: ch, Progress: progress, Elapsed: elapsed, ETA: eta})
 		}
 	}
 	return nil
@@ -126,15 +114,16 @@ func (j *Job) Download(ctx context.Context, c *ranobelib.Client, opts DownloadOp
 
 // fetchImages находит картинки главы, разобрав её разметку, и качает недостающие.
 // Битая картинка не роняет загрузку текста: она пропускается с предупреждением.
-func (j *Job) fetchImages(ctx context.Context, c *ranobelib.Client, chapter *ranobelib.Chapter, opts DownloadOptions) error {
-	var found []content.Image
-	chapter.Content.XHTML(content.Options{
-		Attachments: chapter.Attachments,
-		Images: content.ResolverFunc(func(img content.Image) (string, bool) {
-			found = append(found, img)
-			return "", false // на этом шаге разметка не нужна, нужны только адреса
-		}),
-	})
+func (j *Job) fetchImages(ctx context.Context, src novel.Source, chapter *novel.Chapter, opts DownloadOptions) error {
+	if chapter.Content == nil {
+		return nil
+	}
+
+	var found []novel.Image
+	chapter.Content.XHTML(novel.ResolverFunc(func(img novel.Image) (string, bool) {
+		found = append(found, img)
+		return "", false // на этом шаге разметка не нужна, нужны только адреса
+	}))
 
 	for _, img := range found {
 		if img.URL == "" {
@@ -143,10 +132,9 @@ func (j *Job) fetchImages(ctx context.Context, c *ranobelib.Client, chapter *ran
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		url := c.AbsoluteURL(img.URL)
 
 		j.mu.Lock()
-		asset, known := j.state.Assets[url]
+		asset, known := j.state.Assets[img.URL]
 		j.mu.Unlock()
 		if known {
 			if _, err := os.Stat(j.assetPath(asset.File)); err == nil {
@@ -156,14 +144,14 @@ func (j *Job) fetchImages(ctx context.Context, c *ranobelib.Client, chapter *ran
 
 		ext := img.Ext
 		if ext == "" {
-			ext = extOf(url)
+			ext = extOf(img.URL)
 		}
-		data, _, err := c.Fetch(ctx, url)
+		data, _, err := src.Fetch(ctx, img.URL)
 		if err != nil {
-			if errors.Is(err, ctx.Err()) {
-				return err
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-			msg := fmt.Sprintf("картинка не скачалась (%s): %v", chapter.Title(), err)
+			msg := fmt.Sprintf("картинка не скачалась (%s): %v", chapter.Info.Title(), err)
 			j.warn(msg)
 			if opts.OnWarning != nil {
 				opts.OnWarning(msg)
@@ -171,12 +159,12 @@ func (j *Job) fetchImages(ctx context.Context, c *ranobelib.Client, chapter *ran
 			continue
 		}
 
-		name := assetName(url, ext)
+		name := assetName(img.URL, ext)
 		if err := writeFileAtomic(j.assetPath(name), data); err != nil {
 			return err
 		}
 		j.mu.Lock()
-		j.state.Assets[url] = Asset{File: name, Ext: ext}
+		j.state.Assets[img.URL] = Asset{File: name, Ext: ext}
 		err = j.save()
 		j.mu.Unlock()
 		if err != nil {
@@ -191,15 +179,15 @@ func (j *Job) hasChapter(index int) bool {
 	return err == nil
 }
 
-// LoadChapter читает главу из кэша задания.
-func (j *Job) LoadChapter(index int) (*ranobelib.Chapter, error) {
-	data, err := os.ReadFile(j.chapterPath(index))
+// LoadChapter читает главу из кэша задания и разбирает её тем же источником.
+func (j *Job) LoadChapter(src novel.Source, index int) (*novel.Chapter, error) {
+	raw, err := os.ReadFile(j.chapterPath(index))
 	if err != nil {
 		return nil, err
 	}
-	var ch ranobelib.Chapter
-	if err := json.Unmarshal(data, &ch); err != nil {
+	ch, err := src.DecodeChapter(raw)
+	if err != nil {
 		return nil, fmt.Errorf("job: глава %d: %w", index, err)
 	}
-	return &ch, nil
+	return ch, nil
 }

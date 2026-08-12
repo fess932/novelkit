@@ -1,14 +1,32 @@
-package content
+package markup
 
 import (
 	"encoding/json"
 	"fmt"
 	"html"
 	"strings"
+
+	"github.com/fess932/ranobelib/novel"
 )
 
-// node — узел документа ProseMirror. Атрибуты хранятся сырыми и разбираются
-// лениво: сайт добавляет к ним поля по своему усмотрению, и строгий разбор
+// Document — содержимое главы в виде документа редактора ProseMirror.
+type Document struct {
+	root        node
+	attachments []Attachment
+}
+
+// ProseMirror разбирает документ редактора. Испорченный JSON даёт пустой
+// документ, а не ошибку: одна кривая глава не должна ронять книгу целиком.
+func ProseMirror(raw json.RawMessage, attachments []Attachment) novel.Content {
+	var n node
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return &Document{}
+	}
+	return &Document{root: n, attachments: attachments}
+}
+
+// node — узел документа. Атрибуты хранятся сырыми и разбираются лениво:
+// сайт добавляет к ним поля по своему усмотрению, и строгий разбор
 // ломался бы на первой же незнакомой книге.
 type node struct {
 	Type    string          `json:"type"`
@@ -49,16 +67,46 @@ var markTags = map[string]string{
 	"code":          "code",
 }
 
-func renderDoc(n *node, opt Options) string {
+// XHTML реализует novel.Content.
+func (d *Document) XHTML(images novel.ImageResolver) string {
+	if d == nil || d.root.Type == "" {
+		return ""
+	}
+	r := &pmRenderer{images: images, att: attachmentIndex(d.attachments)}
 	var b strings.Builder
-	r := &pmRenderer{opt: opt, att: attachmentIndex(opt.Attachments)}
-	r.node(&b, *n)
-	return b.String()
+	r.node(&b, d.root)
+	return strings.TrimSpace(b.String())
+}
+
+// PlainText реализует novel.Content.
+func (d *Document) PlainText() string {
+	if d == nil || d.root.Type == "" {
+		return ""
+	}
+	var b strings.Builder
+	var walk func(node)
+	walk = func(cur node) {
+		switch cur.Type {
+		case "text":
+			b.WriteString(cur.Text)
+		case "hardBreak":
+			b.WriteString("\n")
+		}
+		for _, c := range cur.Content {
+			walk(c)
+		}
+		switch cur.Type {
+		case "paragraph", "heading", "blockquote", "listItem":
+			b.WriteString("\n\n")
+		}
+	}
+	walk(d.root)
+	return collapse(b.String())
 }
 
 type pmRenderer struct {
-	opt Options
-	att map[string]Attachment
+	images novel.ImageResolver
+	att    map[string]Attachment
 }
 
 func (r *pmRenderer) children(b *strings.Builder, n node) {
@@ -82,17 +130,11 @@ func (r *pmRenderer) node(b *strings.Builder, n node) {
 			b.WriteString("<p>" + s + "</p>\n")
 		} else {
 			// Пустой абзац на сайте работает отбивкой — сохраняем его.
-			b.WriteString("<p class=\"empty\"> </p>\n")
+			b.WriteString("<p class=\"empty\"> </p>\n")
 		}
 
 	case "heading":
-		level := n.attrs().Level
-		if level < 2 {
-			level = 2
-		}
-		if level > 6 {
-			level = 6
-		}
+		level := min(max(n.attrs().Level, 2), 6)
 		fmt.Fprintf(b, "<h%d>", level)
 		r.children(b, n)
 		fmt.Fprintf(b, "</h%d>\n", level)
@@ -144,7 +186,7 @@ func (r *pmRenderer) text(n node) string {
 		m := n.Marks[i]
 		if m.Type == "link" {
 			if href := m.attrs().Href; href != "" && safeHref(href) {
-				out = `<a href="` + escAttr(href) + `">` + out + `</a>`
+				out = `<a href="` + esc(href) + `">` + out + `</a>`
 			}
 			continue
 		}
@@ -162,7 +204,7 @@ func (r *pmRenderer) image(b *strings.Builder, n node) {
 		if !ok {
 			continue
 		}
-		path, ok := resolve(r.opt, Image{
+		path, ok := resolve(r.images, novel.Image{
 			URL:         att.URL,
 			Name:        att.Name,
 			Ext:         att.Extension,
@@ -173,7 +215,7 @@ func (r *pmRenderer) image(b *strings.Builder, n node) {
 		if !ok {
 			continue
 		}
-		b.WriteString(`<div class="img"><img src="` + escAttr(path) + `" alt=""/></div>` + "\n")
+		b.WriteString(`<div class="img"><img src="` + esc(path) + `" alt=""/></div>` + "\n")
 	}
 	// Подпись к иллюстрации часто содержит примечание переводчика — это текст, его нельзя терять.
 	if d := strings.TrimSpace(a.Description); d != "" {
@@ -181,33 +223,9 @@ func (r *pmRenderer) image(b *strings.Builder, n node) {
 	}
 }
 
-func plainDoc(n *node) string {
-	var b strings.Builder
-	var walk func(node)
-	walk = func(cur node) {
-		switch cur.Type {
-		case "text":
-			b.WriteString(cur.Text)
-		case "hardBreak":
-			b.WriteString("\n")
-		}
-		for _, c := range cur.Content {
-			walk(c)
-		}
-		switch cur.Type {
-		case "paragraph", "heading", "blockquote", "listItem":
-			b.WriteString("\n\n")
-		}
-	}
-	walk(*n)
-	return b.String()
-}
-
 // esc экранирует текст для XML. html.EscapeString отдаёт числовые ссылки
 // вместо именованных, что для XHTML как раз правильно.
 func esc(s string) string { return html.EscapeString(stripInvalidXML(s)) }
-
-func escAttr(s string) string { return esc(s) }
 
 func safeHref(href string) bool {
 	return !strings.HasPrefix(strings.ToLower(strings.TrimSpace(href)), "javascript:")

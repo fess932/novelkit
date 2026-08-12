@@ -1,14 +1,22 @@
-package content
+package markup
 
 import (
 	"strings"
 
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
+
+	"github.com/fess932/ranobelib/novel"
 )
 
+// HTML — содержимое главы в виде разметки.
+//
+// Неизвестные теги разворачиваются (текст не теряется), скрипты и стили
+// выбрасываются, незакрытые теги закрываются, служебные атрибуты сайта
+// не переносятся.
+type HTML string
+
 // allowedTags — теги, которые имеет смысл нести в книгу, и во что они превращаются.
-// Всё, чего здесь нет, разворачивается: обёртка выбрасывается, текст остаётся.
 var allowedTags = map[string]string{
 	"p": "p", "br": "br", "hr": "hr",
 	"b": "strong", "strong": "strong",
@@ -49,17 +57,48 @@ func parseFragment(s string) []*html.Node {
 	return nodes
 }
 
-func renderHTML(s string, opt Options) string {
-	r := &htmlRenderer{opt: opt}
+// XHTML реализует novel.Content.
+func (h HTML) XHTML(images novel.ImageResolver) string {
+	r := &htmlRenderer{images: images}
 	var b strings.Builder
-	for _, n := range parseFragment(s) {
+	for _, n := range parseFragment(string(h)) {
 		r.node(&b, n)
 	}
-	return b.String()
+	return strings.TrimSpace(b.String())
+}
+
+// PlainText реализует novel.Content.
+func (h HTML) PlainText() string {
+	var b strings.Builder
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		switch n.Type {
+		case html.TextNode:
+			b.WriteString(n.Data)
+		case html.ElementNode:
+			name := strings.ToLower(n.Data)
+			if dropTags[name] {
+				return
+			}
+			if name == "br" {
+				b.WriteString("\n")
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+		if n.Type == html.ElementNode && blockTags[strings.ToLower(n.Data)] {
+			b.WriteString("\n\n")
+		}
+	}
+	for _, n := range parseFragment(string(h)) {
+		walk(n)
+	}
+	return collapse(b.String())
 }
 
 type htmlRenderer struct {
-	opt Options
+	images novel.ImageResolver
 }
 
 func (r *htmlRenderer) children(b *strings.Builder, n *html.Node) {
@@ -101,7 +140,7 @@ func (r *htmlRenderer) node(b *strings.Builder, n *html.Node) {
 			r.children(b, n) // ссылка без адреса: текст оставляем, обёртку убираем
 			return
 		}
-		b.WriteString(`<a href="` + escAttr(href) + `">`)
+		b.WriteString(`<a href="` + esc(href) + `">`)
 		r.children(b, n)
 		b.WriteString("</a>")
 		return
@@ -125,11 +164,11 @@ func (r *htmlRenderer) image(b *strings.Builder, n *html.Node) {
 	if src == "" {
 		return
 	}
-	path, ok := resolve(r.opt, Image{URL: src, Ext: extOf(src)})
+	path, ok := resolve(r.images, novel.Image{URL: src, Ext: ExtOf(src)})
 	if !ok {
 		return
 	}
-	b.WriteString(`<div class="img"><img src="` + escAttr(path) + `" alt="` + escAttr(attr(n, "alt")) + `"/></div>` + "\n")
+	b.WriteString(`<div class="img"><img src="` + esc(path) + `" alt="` + esc(attr(n, "alt")) + `"/></div>` + "\n")
 }
 
 func attr(n *html.Node, name string) string {
@@ -141,7 +180,8 @@ func attr(n *html.Node, name string) string {
 	return ""
 }
 
-func extOf(u string) string {
+// ExtOf достаёт расширение файла из адреса.
+func ExtOf(u string) string {
 	if i := strings.IndexAny(u, "?#"); i >= 0 {
 		u = u[:i]
 	}
@@ -149,33 +189,4 @@ func extOf(u string) string {
 		return strings.ToLower(u[i+1:])
 	}
 	return ""
-}
-
-func plainHTML(s string) string {
-	var b strings.Builder
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		switch n.Type {
-		case html.TextNode:
-			b.WriteString(n.Data)
-		case html.ElementNode:
-			name := strings.ToLower(n.Data)
-			if dropTags[name] {
-				return
-			}
-			if name == "br" {
-				b.WriteString("\n")
-			}
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-		if n.Type == html.ElementNode && blockTags[strings.ToLower(n.Data)] {
-			b.WriteString("\n\n")
-		}
-	}
-	for _, n := range parseFragment(s) {
-		walk(n)
-	}
-	return b.String()
 }

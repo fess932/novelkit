@@ -4,99 +4,121 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 
-	"github.com/fess932/ranobelib"
 	"github.com/fess932/ranobelib/job"
+	"github.com/fess932/ranobelib/markup"
+	"github.com/fess932/ranobelib/novel"
 )
 
-// fakeSite — минимальный сайт: карточка, список глав, ветки, главы и картинка.
-type fakeSite struct {
-	// failFrom > 0 — начиная с этого номера главы отдавать 404.
+// fakeSource — источник целиком в памяти. Он же проверяет, что интерфейс
+// novel.Source достаточен для нового сайта: ни одной ссылки на ranobelib здесь нет.
+type fakeSource struct {
+	// failFrom > 0 — начиная с этой главы отдавать «не найдено».
 	failFrom atomic.Int64
-	requests atomic.Int64
+	fetches  atomic.Int64
+	chapters atomic.Int64
 }
 
-func (s *fakeSite) handler() http.Handler {
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("/manga/1--test/chapters", func(w http.ResponseWriter, r *http.Request) {
-		s.requests.Add(1)
-		fmt.Fprint(w, `{"data":[
-			{"id":1,"index":1,"volume":"1","number":"1","name":"Первая","branches":[{"branch_id":5,"teams":[{"name":"Команда"}],"user":{"username":"uploader"}}]},
-			{"id":2,"index":2,"volume":"1","number":"2","name":"Вторая","branches":[{"branch_id":5,"teams":[{"name":"Команда"}],"user":{"username":"uploader"}}]},
-			{"id":3,"index":3,"volume":"2","number":"3","name":"Третья","branches":[{"branch_id":5,"teams":[{"name":"Команда"}],"user":{"username":"uploader"}}]}
-		]}`)
-	})
-
-	mux.HandleFunc("/manga/1--test", func(w http.ResponseWriter, r *http.Request) {
-		s.requests.Add(1)
-		fmt.Fprint(w, `{"data":{"id":1,"rus_name":"Тестовая книга","eng_name":"Test Book","slug_url":"1--test",
-			"cover":{"default":"/uploads/cover.jpg"},
-			"authors":[{"name":"Автор"}],"genres":[{"name":"Фэнтези"}],"releaseDate":"2015",
-			"summary":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Аннотация книги."}]}]}}}`)
-	})
-
-	mux.HandleFunc("/branches/1", func(w http.ResponseWriter, r *http.Request) {
-		s.requests.Add(1)
-		fmt.Fprint(w, `{"data":[{"id":5,"name":"Основная","teams":[{"name":"Команда"},{"name":"Вторая команда"}]}]}`)
-	})
-
-	mux.HandleFunc("/manga/1--test/chapter", func(w http.ResponseWriter, r *http.Request) {
-		s.requests.Add(1)
-		number := r.URL.Query().Get("number")
-		if fail := s.failFrom.Load(); fail > 0 && number >= fmt.Sprint(fail) {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		fmt.Fprintf(w, `{"data":{"id":%s,"volume":"1","number":"%s","name":"Глава",
-			"content":{"type":"doc","content":[
-				{"type":"paragraph","content":[{"type":"text","text":"Текст главы %s."}]},
-				{"type":"image","attrs":{"images":[{"image":"pic"}]}}
-			]},
-			"attachments":[{"name":"pic","extension":"jpg","url":"/uploads/pic.jpg"}]}}`, number, number, number)
-	})
-
-	mux.HandleFunc("/uploads/", func(w http.ResponseWriter, r *http.Request) {
-		s.requests.Add(1)
-		w.Header().Set("Content-Type", "image/jpeg")
-		w.Write(bytes.Repeat([]byte{0xff}, 64))
-	})
-
-	return mux
+type fakeChapter struct {
+	Index  int    `json:"index"`
+	Volume string `json:"volume"`
+	Number string `json:"number"`
+	Name   string `json:"name"`
+	HTML   string `json:"html"`
 }
 
-func setup(t *testing.T) (*fakeSite, *ranobelib.Client, *job.Store) {
+func (s *fakeSource) ID() string                       { return "fake" }
+func (s *fakeSource) Supports(u string) bool           { return strings.Contains(u, "fake.test") }
+func (s *fakeSource) ParseRef(u string) (string, bool) { return "book-1", s.Supports(u) }
+func (s *fakeSource) Search(context.Context, string) ([]novel.Book, error) {
+	return nil, novel.ErrUnsupported
+}
+
+func (s *fakeSource) Book(_ context.Context, id string) (*novel.Book, error) {
+	if id != "book-1" {
+		return nil, novel.ErrNotFound
+	}
+	return &novel.Book{
+		ID:            id,
+		Title:         "Тестовая книга",
+		OriginalTitle: "Test Book",
+		Authors:       []string{"Автор"},
+		Genres:        []string{"Фэнтези"},
+		Year:          "2015",
+		Description:   "Аннотация книги.",
+		CoverURL:      "https://fake.test/cover.jpg",
+		URL:           "https://fake.test/book-1",
+		Editions: []novel.Edition{
+			{ID: "main", Name: "Основная", Teams: []string{"Команда", "Вторая команда"}, Chapters: 3},
+			{ID: "empty", Name: "Заброшенный перевод"},
+		},
+	}, nil
+}
+
+func (s *fakeSource) Chapters(_ context.Context, bookID, editionID string) ([]novel.ChapterInfo, error) {
+	if editionID != "main" {
+		return nil, nil
+	}
+	return []novel.ChapterInfo{
+		{ID: "1", Index: 1, Volume: "1", Number: "1", Name: "Первая"},
+		{ID: "2", Index: 2, Volume: "1", Number: "2", Name: "Вторая"},
+		{ID: "3", Index: 3, Volume: "2", Number: "3", Name: "Третья"},
+	}, nil
+}
+
+func (s *fakeSource) Chapter(_ context.Context, bookID, editionID string, ci novel.ChapterInfo) (*novel.Chapter, error) {
+	s.chapters.Add(1)
+	if fail := s.failFrom.Load(); fail > 0 && int64(ci.Index) >= fail {
+		return nil, fmt.Errorf("глава %s: %w", ci.Number, novel.ErrNotFound)
+	}
+	raw, err := json.Marshal(fakeChapter{
+		Index: ci.Index, Volume: ci.Volume, Number: ci.Number, Name: ci.Name,
+		HTML: fmt.Sprintf(`<p>Текст главы %s.</p><img src="https://fake.test/pic.jpg"/>`, ci.Number),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.DecodeChapter(raw)
+}
+
+func (s *fakeSource) DecodeChapter(raw []byte) (*novel.Chapter, error) {
+	var fc fakeChapter
+	if err := json.Unmarshal(raw, &fc); err != nil {
+		return nil, err
+	}
+	return &novel.Chapter{
+		Info:    novel.ChapterInfo{Index: fc.Index, Volume: fc.Volume, Number: fc.Number, Name: fc.Name},
+		Content: markup.HTML(fc.HTML),
+		Raw:     raw,
+	}, nil
+}
+
+func (s *fakeSource) Fetch(_ context.Context, url string) ([]byte, string, error) {
+	s.fetches.Add(1)
+	return bytes.Repeat([]byte{0xff}, 64), "image/jpeg", nil
+}
+
+func setup(t *testing.T) (*fakeSource, *job.Store) {
 	t.Helper()
-	site := &fakeSite{}
-	srv := httptest.NewServer(site.handler())
-	t.Cleanup(srv.Close)
-
-	c := ranobelib.New(
-		ranobelib.WithAPIURL(srv.URL),
-		ranobelib.WithSiteURL(srv.URL),
-		ranobelib.WithThrottle(0, 0),
-		ranobelib.WithRetries(0),
-	)
 	store, err := job.OpenStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return site, c, store
+	return &fakeSource{}, store
 }
 
-func plan(t *testing.T, store *job.Store, c *ranobelib.Client) *job.Job {
+func plan(t *testing.T, store *job.Store, src novel.Source) *job.Job {
 	t.Helper()
-	j, err := store.Plan(context.Background(), c, job.Request{
-		Slug: "1--test", BranchID: 5, WithImages: true,
+	j, err := store.Plan(context.Background(), src, job.Request{
+		BookID: "book-1", EditionID: "main", WithImages: true,
 	})
 	if err != nil {
 		t.Fatalf("планирование задания: %v", err)
@@ -105,19 +127,17 @@ func plan(t *testing.T, store *job.Store, c *ranobelib.Client) *job.Job {
 }
 
 func TestPlanCollectsMetadata(t *testing.T) {
-	_, c, store := setup(t)
-	j := plan(t, c2s(store), c)
+	src, store := setup(t)
+	st := plan(t, store, src).State()
 
-	st := j.State()
-	if st.Book.Title != "Тестовая книга" {
-		t.Errorf("название книги: %q", st.Book.Title)
+	if st.Book.Title != "Тестовая книга" || st.Book.Description != "Аннотация книги." {
+		t.Errorf("метаданные книги: %+v", st.Book)
 	}
-	// Аннотация приходит документом ProseMirror: она должна стать текстом, а не «[object Object]».
-	if st.Book.Description != "Аннотация книги." {
-		t.Errorf("аннотация разобрана как %q", st.Book.Description)
+	if st.Source.EditionLabel != "Команда & Вторая команда" {
+		t.Errorf("подпись перевода: %q", st.Source.EditionLabel)
 	}
-	if st.Source.BranchLabel != "Команда & Вторая команда" {
-		t.Errorf("подпись ветки: %q", st.Source.BranchLabel)
+	if len(st.Book.Translators) != 2 {
+		t.Errorf("переводчики: %+v", st.Book.Translators)
 	}
 	if len(st.Chapters) != 3 {
 		t.Fatalf("ожидалось 3 главы, получено %d", len(st.Chapters))
@@ -129,11 +149,11 @@ func TestPlanCollectsMetadata(t *testing.T) {
 
 // Загрузка останавливается на первой неустранимой ошибке, а скачанное остаётся.
 func TestDownloadStopsAndResumes(t *testing.T) {
-	site, c, store := setup(t)
-	j := plan(t, store, c)
+	src, store := setup(t)
+	j := plan(t, store, src)
 
-	site.failFrom.Store(3) // третья глава недоступна
-	err := j.Download(context.Background(), c, job.DownloadOptions{})
+	src.failFrom.Store(3) // третья глава недоступна
+	err := j.Download(context.Background(), src, job.DownloadOptions{})
 
 	var chErr *job.ChapterError
 	if !errors.As(err, &chErr) {
@@ -142,7 +162,7 @@ func TestDownloadStopsAndResumes(t *testing.T) {
 	if chErr.Chapter.Number != "3" {
 		t.Errorf("остановились не на той главе: %+v", chErr.Chapter)
 	}
-	if !errors.Is(err, ranobelib.ErrNotFound) {
+	if !errors.Is(err, novel.ErrNotFound) {
 		t.Errorf("причина ошибки должна доставаться через errors.Is: %v", err)
 	}
 	if p := j.Progress(); p.Done != 2 || p.Left() != 1 {
@@ -150,25 +170,38 @@ func TestDownloadStopsAndResumes(t *testing.T) {
 	}
 
 	// Продолжение: качается только недостающая глава.
-	site.failFrom.Store(0)
-	before := site.requests.Load()
-	if err := j.Download(context.Background(), c, job.DownloadOptions{}); err != nil {
+	src.failFrom.Store(0)
+	before := src.chapters.Load()
+	if err := j.Download(context.Background(), src, job.DownloadOptions{}); err != nil {
 		t.Fatalf("продолжение загрузки: %v", err)
 	}
 	if p := j.Progress(); p.Done != 3 {
 		t.Fatalf("после продолжения скачано %d из %d", p.Done, p.Total)
 	}
-	// Одна глава: сам запрос главы плюс, возможно, картинка — но не три главы заново.
-	if got := site.requests.Load() - before; got > 2 {
-		t.Errorf("при продолжении сделано %d запросов — перекачиваются уже скачанные главы", got)
+	if got := src.chapters.Load() - before; got != 1 {
+		t.Errorf("при продолжении запрошено глав: %d, а недоставало одной", got)
+	}
+}
+
+// Одна и та же картинка качается один раз на всё задание.
+func TestImagesFetchedOnce(t *testing.T) {
+	src, store := setup(t)
+	j := plan(t, store, src)
+	before := src.fetches.Load() // обложка уже скачана в Plan
+
+	if err := j.Download(context.Background(), src, job.DownloadOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := src.fetches.Load() - before; got != 1 {
+		t.Errorf("картинку скачали %d раз(а), хотя во всех главах она одна", got)
 	}
 }
 
 // Состояние переживает перезапуск: задание читается с диска как есть.
 func TestReopenKeepsProgress(t *testing.T) {
-	_, c, store := setup(t)
-	j := plan(t, store, c)
-	if err := j.Download(context.Background(), c, job.DownloadOptions{}); err != nil {
+	src, store := setup(t)
+	j := plan(t, store, src)
+	if err := j.Download(context.Background(), src, job.DownloadOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -187,14 +220,14 @@ func TestReopenKeepsProgress(t *testing.T) {
 }
 
 func TestBuildProducesReadableBook(t *testing.T) {
-	_, c, store := setup(t)
-	j := plan(t, store, c)
-	if err := j.Download(context.Background(), c, job.DownloadOptions{}); err != nil {
+	src, store := setup(t)
+	j := plan(t, store, src)
+	if err := j.Download(context.Background(), src, job.DownloadOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
 	out := filepath.Join(t.TempDir(), "book.epub")
-	res, err := j.BuildFile(context.Background(), out, job.BuildOptions{})
+	res, err := j.BuildFile(context.Background(), src, out, job.BuildOptions{})
 	if err != nil {
 		t.Fatalf("сборка книги: %v", err)
 	}
@@ -202,7 +235,7 @@ func TestBuildProducesReadableBook(t *testing.T) {
 		t.Errorf("в книгу попало %d глав, пропущено %d", res.Chapters, res.Missing)
 	}
 	if res.Images != 1 {
-		t.Errorf("картинок в книге: %d (одна и та же картинка не должна дублироваться)", res.Images)
+		t.Errorf("картинок в книге: %d (одна и та же не должна дублироваться)", res.Images)
 	}
 
 	data, err := os.ReadFile(out)
@@ -227,13 +260,13 @@ func TestBuildProducesReadableBook(t *testing.T) {
 
 // Недокачанную книгу тоже можно собрать: пропущенные главы просто не попадают внутрь.
 func TestBuildSkipsMissingChapters(t *testing.T) {
-	site, c, store := setup(t)
-	j := plan(t, store, c)
-	site.failFrom.Store(2)
-	_ = j.Download(context.Background(), c, job.DownloadOptions{})
+	src, store := setup(t)
+	j := plan(t, store, src)
+	src.failFrom.Store(2)
+	_ = j.Download(context.Background(), src, job.DownloadOptions{})
 
 	var warnings []string
-	res, err := j.Build(context.Background(), &bytes.Buffer{}, job.BuildOptions{
+	res, err := j.Build(context.Background(), src, &bytes.Buffer{}, job.BuildOptions{
 		OnWarning: func(msg string) { warnings = append(warnings, msg) },
 	})
 	if err != nil {
@@ -248,8 +281,8 @@ func TestBuildSkipsMissingChapters(t *testing.T) {
 }
 
 func TestRangeSelection(t *testing.T) {
-	_, c, store := setup(t)
-	j, err := store.Plan(context.Background(), c, job.Request{Slug: "1--test", BranchID: 5, From: 2})
+	src, store := setup(t)
+	j, err := store.Plan(context.Background(), src, job.Request{BookID: "book-1", EditionID: "main", From: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,12 +292,27 @@ func TestRangeSelection(t *testing.T) {
 	}
 }
 
-func TestPlanRejectsEmptyBranch(t *testing.T) {
-	_, c, store := setup(t)
-	if _, err := store.Plan(context.Background(), c, job.Request{Slug: "1--test", BranchID: 999}); err == nil {
-		t.Fatal("ожидалась ошибка: в ветке нет глав")
+func TestPlanRejectsEmptyEdition(t *testing.T) {
+	src, store := setup(t)
+	if _, err := store.Plan(context.Background(), src, job.Request{BookID: "book-1", EditionID: "empty"}); err == nil {
+		t.Fatal("ожидалась ошибка: в переводе нет глав")
 	}
 }
 
-// c2s нужен только чтобы не плодить обёртки в первом тесте.
-func c2s(s *job.Store) *job.Store { return s }
+// Задание помнит свой источник и не даст скачивать себя чужим.
+func TestJobRejectsForeignSource(t *testing.T) {
+	src, store := setup(t)
+	j := plan(t, store, src)
+
+	other := &renamedSource{fakeSource: src}
+	if err := j.Download(context.Background(), other, job.DownloadOptions{}); err == nil {
+		t.Fatal("чужой источник должен отвергаться")
+	}
+	if _, err := j.Build(context.Background(), other, &bytes.Buffer{}, job.BuildOptions{}); err == nil {
+		t.Fatal("сборка чужим источником должна отвергаться")
+	}
+}
+
+type renamedSource struct{ *fakeSource }
+
+func (r *renamedSource) ID() string { return "other" }

@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fess932/ranobelib"
+	"github.com/fess932/ranobelib/imagex"
 	"github.com/fess932/ranobelib/job"
+	"github.com/fess932/ranobelib/novel"
+	"github.com/fess932/ranobelib/sources/ranobelib"
 )
 
 // TestLive ходит на настоящий сайт: включается переменной RANOBELIB_LIVE=1.
@@ -17,50 +19,46 @@ func TestLive(t *testing.T) {
 	if os.Getenv("RANOBELIB_LIVE") == "" {
 		t.Skip("живой прогон выключен: RANOBELIB_LIVE=1 включит его")
 	}
-	const slug = "14841--beginning-after-the-end-novel"
+	const link = "https://ranobelib.me/ru/book/14841--beginning-after-the-end-novel"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	c := ranobelib.New(
+	// Источник подключается к реестру ровно так же, как подключался бы любой другой сайт.
+	var registry novel.Registry
+	registry.Register(ranobelib.NewSource(
 		ranobelib.WithThrottle(900*time.Millisecond, 300*time.Millisecond),
 		ranobelib.WithNotifier(func(n ranobelib.Notice) { t.Logf("клиент: %s (%v)", n.Message, n.Wait) }),
-	)
+	))
 
-	manga, err := c.Manga(ctx, slug)
+	src, bookID, err := registry.Resolve(link)
+	if err != nil {
+		t.Fatalf("разбор ссылки: %v", err)
+	}
+
+	book, err := src.Book(ctx, bookID)
 	if err != nil {
 		t.Fatalf("карточка книги: %v", err)
 	}
-	t.Logf("книга: %s, аннотация %d символов", manga.Title(), len([]rune(manga.Summary.PlainText())))
-
-	chapters, err := c.Chapters(ctx, slug)
-	if err != nil {
-		t.Fatalf("список глав: %v", err)
+	t.Logf("книга: %s, аннотация %d символов", book.Title, len([]rune(book.Description)))
+	if len(book.Editions) == 0 {
+		t.Fatal("ни одного перевода")
 	}
-	cards, err := c.Branches(ctx, manga.ID)
-	if err != nil {
-		t.Fatalf("ветки перевода: %v", err)
-	}
-
-	branches := ranobelib.CollectBranches(chapters, cards)
-	if len(branches) == 0 {
-		t.Fatal("ни одной ветки перевода")
-	}
-	for _, b := range branches {
-		t.Logf("ветка %d: %s — %d гл.", b.ID, b.Label(), b.Count)
+	for _, e := range book.Editions {
+		t.Logf("перевод %q: %s — %d гл.", e.ID, e.Label(), e.Chapters)
 	}
 
 	store, err := job.OpenStore(filepath.Join(t.TempDir(), "jobs"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	j, err := store.Plan(ctx, c, job.Request{
-		Slug: slug, BranchID: branches[0].ID, From: 1, To: 2, WithImages: true,
+	j, err := store.Plan(ctx, src, job.Request{
+		BookID: bookID, EditionID: book.Editions[0].ID, From: 1, To: 2, WithImages: true,
 	})
 	if err != nil {
 		t.Fatalf("планирование: %v", err)
 	}
-	if err := j.Download(ctx, c, job.DownloadOptions{
+	if err := j.Download(ctx, src, job.DownloadOptions{
 		OnChapter: func(e job.Event) {
 			t.Logf("%d/%d %s", e.Progress.Done, e.Progress.Total, e.Chapter.Title())
 		},
@@ -73,11 +71,18 @@ func TestLive(t *testing.T) {
 	if out == "" {
 		out = filepath.Join(t.TempDir(), "live.epub")
 	}
-	res, err := j.BuildFile(ctx, out, job.BuildOptions{})
+	// Сжатие включаем: заодно проверяется, что оно работает без внешних программ.
+	opt, err := imagex.NewResizer(filepath.Join(j.Dir(), "min"), 1200, 82)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := j.BuildFile(ctx, src, out, job.BuildOptions{Optimizer: opt})
 	if err != nil {
 		t.Fatalf("сборка: %v", err)
 	}
-	t.Logf("собрано: %s — %d гл., %d илл., %.2f МБ", out, res.Chapters, res.Images, float64(res.Size)/1024/1024)
+	t.Logf("собрано: %s — %d гл., %d илл., %.2f МБ (картинки %d КБ → %d КБ)",
+		out, res.Chapters, res.Images, float64(res.Size)/1024/1024,
+		res.ImagesBefore/1024, res.ImagesAfter/1024)
 
 	if res.Chapters != 2 {
 		t.Errorf("ожидалось 2 главы, получено %d", res.Chapters)

@@ -5,11 +5,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/fess932/ranobelib"
+	"github.com/fess932/ranobelib/sources/ranobelib"
 )
 
 func testClient(t *testing.T, h http.Handler, opts ...ranobelib.Option) *ranobelib.Client {
@@ -48,8 +49,8 @@ func TestChapterDecoding(t *testing.T) {
 	if len(ch.Attachments) != 1 || ch.Attachments[0].URL != "/uploads/pic.jpg" {
 		t.Errorf("вложения разобраны неверно: %+v", ch.Attachments)
 	}
-	if ch.Content.IsZero() {
-		t.Error("содержимое главы потеряно")
+	if body := ch.Content().XHTML(nil); !strings.Contains(body, "текст") {
+		t.Errorf("содержимое главы потеряно: %q", body)
 	}
 }
 
@@ -66,7 +67,7 @@ func TestMangaSummaryBothShapes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := m.Summary.PlainText(); got != "Аннотация." {
+		if got := m.Summary().PlainText(); got != "Аннотация." {
 			t.Errorf("аннотация разобрана как %q", got)
 		}
 	}

@@ -1,21 +1,18 @@
-package content_test
+package markup_test
 
 import (
 	"encoding/json"
 	"strings"
 	"testing"
 
-	"github.com/fess932/ranobelib/content"
+	"github.com/fess932/ranobelib/markup"
+	"github.com/fess932/ranobelib/novel"
 )
 
-// unmarshal имитирует то, как содержимое приезжает внутри ответа API.
-func unmarshal(t *testing.T, raw string) content.Content {
-	t.Helper()
-	var c content.Content
-	if err := json.Unmarshal([]byte(raw), &c); err != nil {
-		t.Fatalf("разбор содержимого: %v", err)
-	}
-	return c
+// parse имитирует то, как содержимое приезжает внутри ответа API:
+// сырым значением, форма которого заранее неизвестна.
+func parse(raw string, att ...markup.Attachment) novel.Content {
+	return markup.Auto(json.RawMessage(raw), att)
 }
 
 func TestProseMirrorXHTML(t *testing.T) {
@@ -31,7 +28,7 @@ func TestProseMirrorXHTML(t *testing.T) {
 		{"type":"blockquote","content":[{"type":"paragraph","content":[{"type":"text","text":"цитата"}]}]}
 	]}`
 
-	got := unmarshal(t, doc).XHTML(content.Options{})
+	got := parse(doc).XHTML(nil)
 	for _, want := range []string{
 		"<p>Обычный <strong>жирный</strong> и <em>курсив</em></p>",
 		`<p class="empty">`,
@@ -49,16 +46,13 @@ func TestProseMirrorImages(t *testing.T) {
 		{"type":"image","attrs":{"description":"Прим. пер.","images":[{"image":"pic"}]}},
 		{"type":"paragraph","content":[{"type":"text","text":"текст"}]}
 	]}`
-	att := []content.Attachment{{Name: "pic", Extension: "jpg", URL: "/uploads/pic.jpg", Width: 100, Height: 200}}
+	att := markup.Attachment{Name: "pic", Extension: "jpg", URL: "/uploads/pic.jpg", Width: 100, Height: 200}
 
-	var seen []content.Image
-	got := unmarshal(t, doc).XHTML(content.Options{
-		Attachments: att,
-		Images: content.ResolverFunc(func(img content.Image) (string, bool) {
-			seen = append(seen, img)
-			return "../images/local.jpg", true
-		}),
-	})
+	var seen []novel.Image
+	got := parse(doc, att).XHTML(novel.ResolverFunc(func(img novel.Image) (string, bool) {
+		seen = append(seen, img)
+		return "../images/local.jpg", true
+	}))
 
 	if len(seen) != 1 || seen[0].URL != "/uploads/pic.jpg" || seen[0].Ext != "jpg" {
 		t.Fatalf("картинка до резолвера не дошла: %+v", seen)
@@ -74,11 +68,15 @@ func TestProseMirrorImages(t *testing.T) {
 
 func TestImagesDroppedWhenResolverRefuses(t *testing.T) {
 	doc := `{"type":"doc","content":[{"type":"image","attrs":{"images":[{"image":"pic"}]}}]}`
-	att := []content.Attachment{{Name: "pic", URL: "/uploads/pic.jpg"}}
+	att := markup.Attachment{Name: "pic", URL: "/uploads/pic.jpg"}
 
-	got := unmarshal(t, doc).XHTML(content.Options{Attachments: att, Images: content.DropImages})
-	if strings.Contains(got, "<img") {
-		t.Errorf("картинка осталась, хотя резолвер отказался:\n%s", got)
+	for name, resolver := range map[string]novel.ImageResolver{
+		"отказ":         novel.DropImages,
+		"нет резолвера": nil,
+	} {
+		if got := parse(doc, att).XHTML(resolver); strings.Contains(got, "<img") {
+			t.Errorf("%s: картинка осталась в разметке:\n%s", name, got)
+		}
 	}
 }
 
@@ -86,7 +84,7 @@ func TestHTMLContent(t *testing.T) {
 	raw := `"<p data-paragraph-index=\"1\">Первый &laquo;абзац&raquo;</p><script>alert(1)</script>` +
 		`<div class=\"x\">Развёрнутый <b>жирный</b></div><p>Не закрыт<em>курсив</p>"`
 
-	got := unmarshal(t, raw).XHTML(content.Options{})
+	got := parse(raw).XHTML(nil)
 	checks := []struct {
 		want string
 		msg  string
@@ -116,24 +114,24 @@ func TestPlainTextFromDocument(t *testing.T) {
 		{"type":"paragraph","content":[{"type":"text","text":"Второй абзац."}]}
 	]}`
 
-	got := unmarshal(t, doc).PlainText()
+	got := parse(doc).PlainText()
 	want := "Первый абзац.\n\nВторой абзац."
 	if got != want {
-		t.Errorf("аннотация разобрана неверно:\nполучено: %q\nождалось: %q", got, want)
+		t.Errorf("аннотация разобрана неверно:\nполучено: %q\nожидалось: %q", got, want)
 	}
 }
 
 func TestPlainTextFromHTML(t *testing.T) {
-	got := unmarshal(t, `"<p>Абзац&nbsp;один</p><p>Абзац два</p>"`).PlainText()
+	got := parse(`"<p>Абзац&nbsp;один</p><p>Абзац два</p>"`).PlainText()
 	if !strings.Contains(got, "Абзац один") || !strings.Contains(got, "Абзац два") {
 		t.Errorf("текст из html разобран неверно: %q", got)
 	}
 }
 
 func TestEmptyContent(t *testing.T) {
-	for _, raw := range []string{`null`, `""`, `{}`} {
-		c := unmarshal(t, raw)
-		if got := c.XHTML(content.Options{}); got != "" {
+	for _, raw := range []string{`null`, `""`, `{}`, `[]`} {
+		c := parse(raw)
+		if got := c.XHTML(nil); got != "" {
 			t.Errorf("для %s ожидалась пустая разметка, получено %q", raw, got)
 		}
 		if got := c.PlainText(); got != "" {
@@ -142,14 +140,14 @@ func TestEmptyContent(t *testing.T) {
 	}
 }
 
-func TestRoundTrip(t *testing.T) {
-	raw := `{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"a"}]}]}`
-	c := unmarshal(t, raw)
-	out, err := json.Marshal(c)
+// Документ, приехавший строкой с JSON внутри, должен разбираться как документ.
+func TestDocumentInsideString(t *testing.T) {
+	inner := `{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"текст"}]}]}`
+	wrapped, err := json.Marshal(inner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(out) != raw {
-		t.Errorf("содержимое не сохранилось дословно:\n%s", out)
+	if got := markup.Auto(wrapped, nil).XHTML(nil); got != "<p>текст</p>" {
+		t.Errorf("документ в строке разобран как %q", got)
 	}
 }
