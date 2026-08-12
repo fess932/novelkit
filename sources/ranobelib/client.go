@@ -89,6 +89,7 @@ type Client struct {
 	siteID  string
 	retries int
 
+	token     string
 	baseDelay time.Duration
 	jitter    time.Duration
 	maxDelay  time.Duration
@@ -124,6 +125,16 @@ func WithSiteURL(u string) Option { return func(c *Client) { c.siteURL = strings
 
 // WithSiteID switches the section: "3" for novels, "1" for manga.
 func WithSiteID(id string) Option { return func(c *Client) { c.siteID = id } }
+
+// WithToken makes requests on behalf of an account.
+//
+// Some titles are invisible without one: the API answers 404 for them exactly as
+// it does for a book that never existed. The token is the site's own access
+// token, taken from a browser session that is already signed in — the library
+// does not sign in for you and never sees a password.
+func WithToken(token string) Option {
+	return func(c *Client) { c.token = strings.TrimSpace(token) }
+}
 
 // WithNotifier subscribes the caller to pause and retry notices.
 func WithNotifier(fn func(Notice)) Option { return func(c *Client) { c.notify = fn } }
@@ -246,6 +257,9 @@ func (c *Client) attempt(ctx context.Context, op, url, accept string) (body []by
 	req.Header.Set("Referer", c.siteURL+"/")
 	req.Header.Set("Origin", c.siteURL)
 	req.Header.Set("Site-Id", c.siteID)
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 
 	c.last = time.Now()
 	resp, err := c.httpc.Do(req)
@@ -270,9 +284,15 @@ func (c *Client) attempt(ctx context.Context, op, url, accept string) (body []by
 	case resp.StatusCode >= 400:
 		// 4xx is not retried: a paid chapter, a typo in the slug, a removed book.
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		message := strings.TrimSpace(string(snippet))
+		// The site hides restricted titles behind the same 404 it uses for
+		// missing ones, so say so rather than let the caller chase a typo.
+		if resp.StatusCode == http.StatusNotFound && c.token == "" {
+			message += " (no token: titles that require an account look exactly like this)"
+		}
 		return nil, "", 0, &Error{
 			Op: op, URL: url, StatusCode: resp.StatusCode,
-			Message: strings.TrimSpace(string(snippet)),
+			Message: message,
 		}
 	}
 

@@ -74,6 +74,24 @@ In parentheses is the site's internal name, in brackets the people who posted th
 chapters. A translation with no chapters is listed but cannot be chosen. Pick one
 by id (`--edition 9824`) or by team name (`--edition-name "Эрл Грей"`).
 
+### Titles that need an account
+
+Some titles are invisible to anonymous requests: the API answers 404 for them,
+exactly as it does for a book that never existed. If a link opens in a signed-in
+browser but the tool reports "not found", that is what happened — and the error
+says so.
+
+Pass the access token of a session that is already signed in:
+
+```sh
+export RANOBELIB_TOKEN='...'
+novelkit https://ranobelib.me/ru/book/230300--...
+```
+
+The token is taken from the browser (developer tools, the site's own session
+storage); nothing here signs in for you, and no password is ever involved. Keep
+it in the environment rather than in shell history.
+
 ### Stopping and resuming
 
 A download stops at the first unrecoverable error, keeping what it already has:
@@ -109,6 +127,7 @@ translation, not the chapter numbers printed on the site.
 | `--build-only` | assemble from the cache, download nothing |
 | `--refresh-meta` | refresh the blurb, author and genres |
 | `--resume [dir]` / `--list-jobs` | resuming and the job list |
+| `--token <token>` | account token; some titles are invisible without one |
 | `--yes` | no questions |
 
 # The library
@@ -194,6 +213,9 @@ error has to do something different in each case.
 `Chapter.Raw` is the site's own response; the cache stores exactly that and
 `DecodeChapter` turns it back into a chapter, so fixing a parser never means
 downloading anything again.
+
+`ranobelib.WithToken` does the same for library users: the token rides along with
+every request, including file downloads.
 
 A source paces its own requests: the core does not do it, and sites cut off
 clients that hammer them. `sources/ranobelib` ships a client that does this —

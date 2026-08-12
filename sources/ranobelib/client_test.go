@@ -173,3 +173,46 @@ func TestContextCancels(t *testing.T) {
 		t.Errorf("expected a context cancellation, got %v", err)
 	}
 }
+
+// An account token travels with every request, including file downloads.
+func TestTokenIsSent(t *testing.T) {
+	var seen []string
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("Authorization"))
+		w.Write([]byte(`{"data":[]}`))
+	}), ranobelib.WithToken("  secret  "))
+
+	if _, err := c.Chapters(context.Background(), "1--test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Fetch(context.Background(), "/uploads/pic.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range seen {
+		if got != "Bearer secret" {
+			t.Errorf("Authorization header: %q", got)
+		}
+	}
+	if len(seen) != 2 {
+		t.Errorf("expected 2 requests, got %d", len(seen))
+	}
+}
+
+// Without a token nothing is sent, and a 404 explains that a token might be the
+// reason: the site hides restricted titles behind the same status.
+func TestNoTokenNoHeaderButAHint(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("Authorization sent without a token: %q", got)
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	_, err := c.Manga(context.Background(), "1--test")
+	if !errors.Is(err, ranobelib.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "no token") {
+		t.Errorf("a 404 without a token should mention it: %v", err)
+	}
+}
